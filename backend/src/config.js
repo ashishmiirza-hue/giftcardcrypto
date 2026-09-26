@@ -1,22 +1,67 @@
 import 'dotenv/config';
 import { ethers } from 'ethers';
 
+// Each network has exactly one accepted stablecoin.
 const NETWORKS = {
+  bsc: {
+    key: 'bsc',
+    name: 'BNB Smart Chain (BEP-20)',
+    chainId: 56,
+    token: { symbol: 'USDT', address: '0x55d398326f99059fF775485246999027B3197955', decimals: 18 },
+    gasToken: 'BNB',
+    explorer: 'https://bscscan.com',
+    publicRpc: 'https://bsc.drpc.org',
+    confirmations: 3,
+    price: { coinbase: 'USDT', coingecko: 'tether' },
+  },
   base: {
     key: 'base',
     name: 'Base',
     chainId: 8453,
-    usdc: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+    token: { symbol: 'USDC', address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', decimals: 6 },
+    gasToken: 'ETH',
     explorer: 'https://basescan.org',
     publicRpc: 'https://mainnet.base.org',
+    confirmations: 2,
+    price: { coinbase: 'USDC', coingecko: 'usd-coin' },
+  },
+  // Free testing on BSC testnet with your own MockUSDT (contracts/MockUSDT.sol):
+  // set TOKEN_ADDRESS to the deployed mock.
+  'bsc-testnet': {
+    key: 'bsc-testnet',
+    name: 'BSC Testnet',
+    chainId: 97,
+    token: { symbol: 'USDT', address: null, decimals: 18 },
+    gasToken: 'tBNB',
+    explorer: 'https://testnet.bscscan.com',
+    publicRpc: 'https://bsc-testnet-rpc.publicnode.com',
+    confirmations: 2,
+    price: { coinbase: 'USDT', coingecko: 'tether' },
+    testnet: true,
+  },
+  // Local development chain (ganache/anvil). Needs RPC_URL and TOKEN_ADDRESS.
+  local: {
+    key: 'local',
+    name: 'Local test chain',
+    chainId: Number(process.env.LOCAL_CHAIN_ID || 1337),
+    token: { symbol: 'USDT', address: null, decimals: 18 },
+    gasToken: 'ETH',
+    explorer: '',
+    publicRpc: 'http://127.0.0.1:8545',
+    confirmations: 1,
+    price: { coinbase: 'USDT', coingecko: 'tether' },
+    testnet: true,
   },
   'base-sepolia': {
     key: 'base-sepolia',
     name: 'Base Sepolia (testnet)',
     chainId: 84532,
-    usdc: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+    token: { symbol: 'USDC', address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', decimals: 6 },
+    gasToken: 'ETH',
     explorer: 'https://sepolia.basescan.org',
     publicRpc: 'https://sepolia.base.org',
+    confirmations: 2,
+    price: { coinbase: 'USDC', coingecko: 'usd-coin' },
   },
 };
 
@@ -29,11 +74,21 @@ function required(name) {
   return v.trim();
 }
 
-const networkKey = (process.env.NETWORK || 'base').trim();
+const networkKey = (process.env.NETWORK || 'bsc').trim();
 const network = NETWORKS[networkKey];
 if (!network) {
   console.error(`[config] NETWORK must be one of: ${Object.keys(NETWORKS).join(', ')}`);
   process.exit(1);
+}
+
+// Test networks use your own mock token; mainnets always use the real contract.
+if (network.testnet && !network.token.address) {
+  const t = (process.env.TOKEN_ADDRESS || '').trim();
+  if (!ethers.isAddress(t)) {
+    console.error(`[config] NETWORK=${networkKey} ke liye TOKEN_ADDRESS chahiye (apne deploy kiye MockUSDT ka address).`);
+    process.exit(1);
+  }
+  network.token = { ...network.token, address: ethers.getAddress(t) };
 }
 
 const wallet = required('RECEIVING_WALLET');
@@ -58,14 +113,24 @@ export const config = {
   wallet: ethers.getAddress(wallet),
   reownProjectId: required('REOWN_PROJECT_ID'),
   adminKey,
-  confirmations: Math.max(1, Number(process.env.CONFIRMATIONS || 2)),
+  confirmations: Math.max(1, Number(process.env.CONFIRMATIONS || network.confirmations)),
   pollIntervalMs: Math.max(3000, Number(process.env.POLL_INTERVAL_MS || 10000)),
   orderTtlMin: Number(process.env.ORDER_TTL_MIN || 30),
   latePaymentHours: Number(process.env.LATE_PAYMENT_HOURS || 24),
-  usdcInrFallback: Number(process.env.USDC_INR_FALLBACK || 88),
+  // INR per 1 token (USDT/USDC). USDC_INR_FALLBACK still accepted for old setups.
+  inrFallback: Number(process.env.INR_RATE_FALLBACK || process.env.USDC_INR_FALLBACK || 95),
   startBlock: process.env.START_BLOCK ? Number(process.env.START_BLOCK) : null,
-  usdcDecimals: 6,
   trustProxy: Number(process.env.TRUST_PROXY ?? 1),
   allowedOrigins: (process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim().replace(/\/$/, '')).filter(Boolean),
   dbPath: (process.env.DB_PATH || '').trim() || null,
+
+  // ---- AI token billing (optional) ----
+  billing: {
+    contract: ethers.isAddress((process.env.BILLING_CONTRACT || '').trim()) ? ethers.getAddress(process.env.BILLING_CONTRACT.trim()) : null,
+    keeperKey: (process.env.KEEPER_PRIVATE_KEY || '').trim() || null,
+    pricePer1k: Number(process.env.AI_PRICE_PER_1K_TOKENS || 0.002),
+    defaultApprove: Number(process.env.AI_DEFAULT_APPROVE || 1000),
+    defaultMaxPerCharge: Number(process.env.AI_DEFAULT_MAX_PER_CHARGE || 50),
+    defaultMaxPerPeriod: Number(process.env.AI_DEFAULT_MAX_PER_30_DAYS || 200),
+  },
 };

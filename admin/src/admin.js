@@ -7,6 +7,7 @@ const KEY = 'tohfa:admin-key';
 
 let key = sessionStorage.getItem(KEY) || '';
 let data = null;
+let bill = null;   // AI billing overview
 
 let toastTimer;
 function toast(text) {
@@ -38,19 +39,94 @@ function logout() {
 }
 
 async function load() {
-  data = await api('/api/admin/overview');
+  [data, bill] = await Promise.all([
+    api('/api/admin/overview'),
+    api('/api/admin/billing').catch((e) => ({ error: e.message })),
+  ]);
   $('#login').hidden = true;
   $('#app').hidden = false;
   ['#logout', '#refresh'].forEach((s) => { $(s).hidden = false; });
   const pill = $('#net-pill');
-  pill.textContent = data.network.key === 'base' ? 'Live: Base' : 'Test mode: Base Sepolia';
-  pill.classList.toggle('test', data.network.key !== 'base');
+  const isTest = data.network.key.includes('sepolia');
+  pill.textContent = `${isTest ? 'Test mode' : 'Live'}: ${data.network.token.symbol} on ${data.network.name}`;
+  pill.classList.toggle('test', isTest);
   pill.hidden = false;
   render();
 }
 
+function renderBilling() {
+  const sym = data.network.token.symbol;
+  const explorer = data.network.explorer;
+  const link = (kind, h, text) => (h ? (explorer ? `<a href="${explorer}/${kind}/${esc(h)}" target="_blank" rel="noopener">${esc(text || short(h))}</a>` : esc(text || short(h))) : '');
+  const box = $('#billing-status');
+  if (!bill || bill.error) { box.innerHTML = `<p class="msg err">${esc(bill?.error || 'Billing data not available.')}</p>`; return; }
+  const st = bill.status;
+  if (!st.enabled) {
+    box.innerHTML = `<p class="msg warn">Billing is off. <a href="./deploy.html">Deploy the billing contract</a> from your wallet, then add <code>BILLING_CONTRACT</code> and <code>KEEPER_PRIVATE_KEY</code> in Render.</p>`;
+  } else {
+    box.innerHTML = `
+      ${st.problems.length ? `<div class="problems">${st.problems.map((p) => `<p class="msg err">${esc(p)}</p>`).join('')}</div>` : ''}
+      <div class="stats">
+        <div class="stat"><div class="k">Contract</div><div class="v">${link('address', st.contract)}</div></div>
+        <div class="stat"><div class="k">Status</div><div class="v">${st.paused ? '<span class="pill off">Paused</span>' : '<span class="pill on">Running</span>'}</div></div>
+        <div class="stat"><div class="k">Keeper wallet</div><div class="v">${st.keeperConfigured ? link('address', st.keeperAddress) : '<span class="pill off">No key</span>'}</div></div>
+        <div class="stat"><div class="k">Keeper gas</div><div class="v">${st.keeperGas !== undefined ? `${Number(st.keeperGas).toFixed(4)} ${esc(data.network.gasToken)}` : '-'}</div></div>
+        <div class="stat"><div class="k">Customers</div><div class="v">${bill.totals.accounts}</div></div>
+        <div class="stat"><div class="k">Collected (${esc(sym)})</div><div class="v">${esc(bill.totals.paid)}</div></div>
+      </div>`;
+  }
+
+  // settings form (don't overwrite while typing)
+  const s = bill.settings;
+  const setIfIdle = (id, v) => { const el = $(id); if (document.activeElement !== el) el.value = v; };
+  setIfIdle('#s-price', s.pricePer1k); setIfIdle('#s-approve', s.defaultApprove);
+  setIfIdle('#s-charge', s.defaultMaxPerCharge); setIfIdle('#s-period', s.defaultMaxPerPeriod);
+  $('label[for="s-price"]').textContent = `Price per 1,000 tokens (${sym})`;
+
+  const sel = $('#u-wallet'); const cur = sel.value;
+  sel.innerHTML = bill.accounts.length
+    ? bill.accounts.map((a) => `<option value="${a.wallet}">${esc(a.label || short(a.wallet))}${a.email ? ` (${esc(a.email)})` : ''}</option>`).join('')
+    : '<option value="">No customers yet</option>';
+  if (cur) sel.value = cur;
+  updateCost();
+
+  $('#billing-accounts').innerHTML = bill.accounts.length ? `
+    <thead><tr><th>Customer</th><th>On-chain</th><th>Limits (charge / 30d)</th><th>Left 30d</th><th>Approved</th><th>Balance</th><th>Tokens</th><th>Due</th><th>Can charge now</th><th>Amount</th><th></th><th></th></tr></thead>
+    <tbody>${bill.accounts.map((a) => {
+      const c = a.chain || {};
+      return `<tr data-wallet="${a.wallet}">
+        <td>${link('address', a.wallet, a.label || short(a.wallet))}${a.email ? `<br/><span class="small">${esc(a.email)}</span>` : ''}${a.blocked ? ' <span class="pill off">Blocked</span>' : ''}</td>
+        <td>${c.active ? '<span class="pill on">Active</span>' : '<span class="pill off">Off</span>'}</td>
+        <td>${c.active ? `${esc(c.maxPerCharge)} / ${esc(c.maxPerPeriod)}` : '-'}</td>
+        <td>${esc(c.remainingInPeriod ?? '-')}</td>
+        <td>${esc(c.allowance ?? '-')}</td>
+        <td>${esc(c.balance ?? '-')}</td>
+        <td>${Number(a.tokensUsed).toLocaleString('en-IN')}</td>
+        <td><strong>${esc(a.due)}</strong>${Number(a.inFlight) > 0 ? `<br/><span class="small">${esc(a.inFlight)} in progress</span>` : ''}</td>
+        <td>${Number(a.chargeableNow) > 0 ? esc(a.chargeableNow) : `<span class="small">${esc(a.cannotChargeReason || '0')}</span>`}</td>
+        <td><input class="amt-in" type="number" min="0" step="0.01" placeholder="${esc(a.chargeableNow)}" aria-label="Amount to charge" /></td>
+        <td><button class="btn btn-primary btn-sm" data-charge="${a.wallet}" type="button" ${Number(a.chargeableNow) > 0 && st.keeperConfigured ? '' : 'disabled'}>Charge</button></td>
+        <td><button class="btn btn-ghost btn-sm" data-block="${a.wallet}" data-state="${a.blocked ? 0 : 1}" type="button">${a.blocked ? 'Unblock' : 'Block'}</button></td>
+      </tr>`;
+    }).join('')}</tbody>` : '<tbody><tr><td>No customers yet. They appear after activating on the AI tokens page.</td></tr></tbody>';
+
+  $('#billing-charges').innerHTML = bill.charges.length ? `
+    <thead><tr><th>When</th><th>Customer</th><th>Amount (${esc(sym)})</th><th>Status</th><th>Transaction</th><th>Error</th></tr></thead>
+    <tbody>${bill.charges.map((c) => `<tr>
+      <td>${when(c.created_at)}</td><td>${esc(short(c.wallet))}</td><td>${esc(c.amount)}</td>
+      <td class="status ${esc(c.status)}">${esc(c.status)}</td><td>${link('tx', c.tx_hash)}</td><td class="small">${esc(c.error || '')}</td></tr>`).join('')}</tbody>`
+    : '<tbody><tr><td>No charges yet.</td></tr></tbody>';
+}
+
+function updateCost() {
+  if (!bill?.settings) return;
+  const t = Number($('#u-tokens').value);
+  $('#u-cost').textContent = t > 0 ? `Cost: ${(t / 1000 * bill.settings.pricePer1k).toFixed(6)} ${data.network.token.symbol}` : '';
+}
+
 function render() {
   const { products, orders, unmatched, totals, rate, network, wallet, chain } = data;
+  const sym = network.token.symbol;
   const warn = $('#chain-warn');
   warn.hidden = !!chain?.ok;
   warn.textContent = chain?.ok ? '' : `Blockchain se connection nahi hai, payments confirm nahi hongi. ${chain?.error || ''}`;
@@ -59,10 +135,10 @@ function render() {
 
   $('#stats').innerHTML = [
     ['Paid orders', totals.orders],
-    ['USDC received', totals.usdc],
+    [`${sym} received`, totals.received],
     ['Codes in stock', stock],
     ['Paid, waiting for a code', waiting],
-    ['USDC rate', `₹${Number(rate.rate).toFixed(2)} (${rate.source})`],
+    [`${sym} rate`, `₹${Number(rate.rate).toFixed(2)} (${rate.source})`],
     ['Receiving wallet', `<a href="${network.explorer}/address/${wallet}" target="_blank" rel="noopener">${short(wallet)}</a>`],
   ].map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
 
@@ -74,7 +150,7 @@ function render() {
         <td>${esc(p.category)}</td>
         <td><input type="number" min="1" data-f="face_value_inr" value="${p.face_value_inr}" aria-label="Face value" /></td>
         <td><input type="number" min="0" max="89" step="0.5" data-f="discount_pct" value="${p.discount_pct}" aria-label="Discount" /></td>
-        <td>${esc(p.price_usdc)} USDC</td>
+        <td>${esc(p.price)} ${esc(sym)}</td>
         <td>${p.in_stock}</td>
         <td>${p.reserved}</td>
         <td>${p.sold}</td>
@@ -102,11 +178,13 @@ function render() {
       </tr>`).join('')}</tbody>` : '<tbody><tr><td>No orders yet.</td></tr></tbody>';
 
   $('#unmatched').innerHTML = unmatched.length ? `
-    <thead><tr><th>Seen</th><th>Amount USDC</th><th>From</th><th>Transaction</th></tr></thead>
+    <thead><tr><th>Seen</th><th>Amount ${esc(sym)}</th><th>From</th><th>Transaction</th></tr></thead>
     <tbody>${unmatched.map((u) => `
       <tr><td>${when(u.seen_at)}</td><td>${esc(u.amount)}</td>
       <td><a href="${network.explorer}/address/${esc(u.payer)}" target="_blank" rel="noopener">${short(u.payer)}</a></td>
       <td>${tx(u.tx_hash)}</td></tr>`).join('')}</tbody>` : '<tbody><tr><td>None. Every payment matched an order.</td></tr></tbody>';
+
+  renderBilling();
 }
 
 document.addEventListener('click', async (e) => {
@@ -140,6 +218,43 @@ document.addEventListener('click', async (e) => {
       return toast(`Added ${r.added}${r.duplicates ? `, skipped ${r.duplicates} duplicate${r.duplicates > 1 ? 's' : ''}` : ''}${r.delivered ? `, delivered ${r.delivered} waiting order${r.delivered > 1 ? 's' : ''}` : ''}`);
     }
 
+    if (b.dataset.charge) {
+      const row = b.closest('tr');
+      const amount = row.querySelector('.amt-in').value.trim();
+      const shown = amount || row.querySelector('.amt-in').placeholder;
+      if (!confirm(`Charge ${shown} ${data.network.token.symbol} from ${short(b.dataset.charge)}?`)) return;
+      b.disabled = true; b.textContent = 'Charging…';
+      try {
+        const r = await api('/api/admin/billing/charge', { method: 'POST', body: { wallet: b.dataset.charge, amount: amount || undefined } });
+        toast(r.charge.status === 'paid' ? `Charged ${r.charge.amount} ${data.network.token.symbol}` : `Charge ${r.charge.status}`);
+      } finally { await load(); }
+      return;
+    }
+
+    if (b.dataset.block) {
+      await api('/api/admin/billing/account', { method: 'POST', body: { wallet: b.dataset.block, blocked: b.dataset.state === '1' } });
+      await load();
+      return toast(b.dataset.state === '1' ? 'Customer blocked: their API key stops working' : 'Customer unblocked');
+    }
+
+    if (b.id === 'add-usage') {
+      const wallet = $('#u-wallet').value;
+      if (!wallet) return toast('No customer selected.');
+      const r = await api('/api/admin/billing/usage', { method: 'POST', body: { wallet, tokens: Number($('#u-tokens').value), note: $('#u-note').value } });
+      $('#u-tokens').value = ''; $('#u-note').value = '';
+      await load();
+      return toast(`Added ${r.cost} ${data.network.token.symbol}. Due now: ${r.due}`);
+    }
+
+    if (b.id === 'save-billing') {
+      await api('/api/admin/billing/settings', { method: 'POST', body: {
+        pricePer1k: $('#s-price').value, defaultApprove: $('#s-approve').value,
+        defaultMaxPerCharge: $('#s-charge').value, defaultMaxPerPeriod: $('#s-period').value,
+      } });
+      await load();
+      return toast('Billing settings saved');
+    }
+
     if (b.id === 'add-product') {
       const body = {
         brand: $('#np-brand').value, name: $('#np-name').value || 'Gift card', category: $('#np-cat').value || 'Shopping',
@@ -155,11 +270,12 @@ document.addEventListener('click', async (e) => {
   }
 });
 
+$('#u-tokens').addEventListener('input', updateCost);
 $('#key').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#login-btn').click(); });
 
 if (key) load().catch(() => logout());
 // Auto-refresh every 30s, but not while you're editing a row in the cards table.
 setInterval(() => {
-  if (!key || document.hidden || $('#app').hidden || $('#products').contains(document.activeElement)) return;
+  if (!key || document.hidden || $('#app').hidden || $('#products').contains(document.activeElement) || $('#billing').contains(document.activeElement)) return;
   load().catch(() => {});
 }, 30000);

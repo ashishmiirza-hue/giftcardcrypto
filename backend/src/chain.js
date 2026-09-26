@@ -4,22 +4,32 @@ import { db, getMeta, setMeta } from './db.js';
 import { settleOrder, findOrderForPayment, expireOrders } from './orders.js';
 
 const net = ethers.Network.from(config.network.chainId);
-const makeProvider = (url) => new ethers.JsonRpcProvider(url, net, { staticNetwork: net, batchMaxCount: 1 });
+// cacheTimeout -1: never reuse a cached nonce/receipt, so back-to-back keeper charges get fresh nonces.
+const makeProvider = (url) => new ethers.JsonRpcProvider(url, net, { staticNetwork: net, batchMaxCount: 1, cacheTimeout: -1 });
 
 export const provider = makeProvider(config.rpcUrl);
 const provider2 = config.rpcUrl2 ? makeProvider(config.rpcUrl2) : null;
 
 const TRANSFER_ABI = ['event Transfer(address indexed from, address indexed to, uint256 value)'];
 const iface = new ethers.Interface(TRANSFER_ABI);
-const usdc = new ethers.Contract(config.network.usdc, TRANSFER_ABI, provider);
-const USDC = config.network.usdc.toLowerCase();
+const token = new ethers.Contract(config.network.token.address, TRANSFER_ABI, provider);
+const TOKEN = config.network.token.address.toLowerCase();
 const WALLET = config.wallet.toLowerCase();
 const TRANSFER_TOPIC = iface.getEvent('Transfer').topicHash;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// AI-billing charges pull USDT from customers into the treasury. If the treasury
+// is the same wallet as RECEIVING_WALLET, those transfers must never be treated
+// as gift-card payments.
+const BILLING = (process.env.BILLING_CONTRACT || '').trim().toLowerCase();
+function isBillingTx(txHash, logs) {
+  if (db.prepare('SELECT 1 FROM billing_charges WHERE tx_hash = ?').get(txHash)) return true;
+  return !!(BILLING && logs?.some((l) => l.address.toLowerCase() === BILLING));
+}
+
 /**
- * Read a tx from one RPC and return how much USDC it sent to our wallet.
+ * Read a tx from one RPC and return how much of the store's token it sent to our wallet.
  * state: 'pending' (not mined / not enough confirmations) | 'failed' | 'ok'
  */
 async function readPayment(p, txHash) {
@@ -29,11 +39,12 @@ async function readPayment(p, txHash) {
 
   const latest = await p.getBlockNumber();
   if (latest - receipt.blockNumber + 1 < config.confirmations) return { state: 'pending' };
+  if (isBillingTx(txHash, receipt.logs)) return { state: 'ok', value: 0n, from: null, block: receipt.blockNumber };
 
   let value = 0n;
   let from = null;
   for (const log of receipt.logs) {
-    if (log.address.toLowerCase() !== USDC) continue;           // only the real USDC contract
+    if (log.address.toLowerCase() !== TOKEN) continue;          // only the real USDT/USDC contract
     if (log.topics[0] !== TRANSFER_TOPIC) continue;
     const { args } = iface.parseLog(log);
     if (args.to.toLowerCase() !== WALLET) continue;             // only transfers to our wallet
@@ -59,6 +70,7 @@ async function verifiedPayment(txHash) {
 /** Record a transfer we saw: settle the matching order, or park it for the admin. */
 function handlePayment(txHash, payer, value, block) {
   if (value === 0n) return;
+  if (isBillingTx(txHash)) return;
   if (db.prepare('SELECT 1 FROM orders WHERE tx_hash = ?').get(txHash)) return;
 
   const order = findOrderForPayment(value.toString(), txHash);
@@ -96,18 +108,13 @@ export async function verifyClaim(txHash) {
   }
 }
 
-/**
- * Backup path: every POLL_INTERVAL_MS, read USDC Transfer logs to our wallet
- * from confirmed blocks. Remembers the last block in the DB, so after a restart
- * it catches up on anything it missed.
- */
 export const chainStatus = { ok: false, lastBlock: null, error: null };
 
 function rpcHint(e) {
   const m = `${e.shortMessage || ''} ${e.message || ''}`;
   if (/does not exist|not available|UNSUPPORTED_OPERATION|-32601/i.test(m))
     return `RPC_URL ${config.network.name} ka normal RPC nahi lagta (shayad multichain/advanced API URL hai). ` +
-           `Sahi format: ${config.network.key === 'base' ? 'https://rpc.ankr.com/base/KEY' : 'https://rpc.ankr.com/base_sepolia/KEY'} ` +
+           `Sahi format: ${{ bsc: 'https://rpc.ankr.com/bsc/KEY', base: 'https://rpc.ankr.com/base/KEY' }[config.network.key] || 'https://rpc.ankr.com/base_sepolia/KEY'} ` +
            `ya RPC_URL khaali chhodo (free public RPC ${config.network.publicRpc} use hoga).`;
   if (/401|403|unauthori|api key/i.test(m)) return 'RPC_URL ki key galat hai ya expire ho gayi.';
   if (/429|rate/i.test(m)) return 'RPC ne rate-limit kiya. POLL_INTERVAL_MS badhao ya doosra RPC lo.';
@@ -139,7 +146,7 @@ async function waitForRpc() {
 }
 
 /**
- * Backup path: every POLL_INTERVAL_MS, read USDC Transfer logs to our wallet
+ * Backup path: every POLL_INTERVAL_MS, read token Transfer logs to our wallet
  * from confirmed blocks. Remembers the last block in the DB, so after a restart
  * it catches up on anything it missed.
  */
@@ -152,7 +159,7 @@ export async function startListener() {
   }
   console.log(`[chain] listening on ${config.network.name} from block ${last + 1} every ${config.pollIntervalMs / 1000}s`);
 
-  const filter = usdc.filters.Transfer(null, config.wallet);
+  const filter = token.filters.Transfer(null, config.wallet);
   const CHUNK = 500;
 
   for (;;) {
@@ -163,7 +170,7 @@ export async function startListener() {
       const confirmed = (await provider.getBlockNumber()) - config.confirmations + 1;
       while (confirmed > last) {
         const to = Math.min(confirmed, last + CHUNK);
-        const logs = await usdc.queryFilter(filter, last + 1, to);
+        const logs = await token.queryFilter(filter, last + 1, to);
 
         // A single tx can carry several transfers; add them up per tx.
         const byTx = new Map();

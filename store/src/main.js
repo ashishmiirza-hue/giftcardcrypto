@@ -1,6 +1,6 @@
 import { createAppKit } from '@reown/appkit';
 import { WagmiAdapter } from '@reown/appkit-adapter-wagmi';
-import { base, baseSepolia } from '@reown/appkit/networks';
+import { base, baseSepolia, bsc } from '@reown/appkit/networks';
 import { writeContract, switchChain, getAccount, watchAccount, readContract } from '@wagmi/core';
 import { erc20Abi, formatUnits } from 'viem';
 
@@ -10,6 +10,9 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const inr = (n) => '₹' + Number(n).toLocaleString('en-IN');
 const short = (a) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : '');
 const LAST_ORDER_KEY = 'tohfa:last-order';
+// The store's token (USDT on BSC, or USDC on Base) comes from the server config.
+const SYM = () => state.cfg?.network?.token?.symbol || 'USDT';
+const GAS = () => state.cfg?.network?.gasToken || 'BNB';
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -55,8 +58,8 @@ function ticketHTML(p, { price } = {}) {
       </div>
       <div class="ticket-stub">
         <span class="you-pay">You pay</span>
-        <span class="price">${esc(price ?? p.price_usdc)}</span>
-        <span class="unit">USDC</span>
+        <span class="price">${esc(price ?? p.price)}</span>
+        <span class="unit">${esc(SYM())}</span>
         ${off}
       </div>
     </div>`;
@@ -76,13 +79,14 @@ const state = {
   error: null,
   balance: null,
   pollTimer: null,
+  errorDetail: null,
   confirmSince: null,
   tickTimer: null,
 };
 
 // ---------------------------------------------------------------- wallet (Reown AppKit)
 function initWallet(cfg) {
-  const network = cfg.network.chainId === base.id ? base : baseSepolia;
+  const network = { [bsc.id]: bsc, [base.id]: base, [baseSepolia.id]: baseSepolia }[cfg.network.chainId] || bsc;
   const adapter = new WagmiAdapter({ projectId: cfg.projectId, networks: [network] });
   state.wagmi = adapter.wagmiConfig;
   state.appkit = createAppKit({
@@ -92,13 +96,13 @@ function initWallet(cfg) {
     projectId: cfg.projectId,
     metadata: {
       name: cfg.storeName,
-      description: 'Gift cards paid in USDC',
+      description: `Gift cards paid in ${cfg.network.token.symbol}`,
       url: window.location.origin,
       icons: [`${window.location.origin}/icon.png`],
     },
     features: { analytics: false, email: false, socials: false, swaps: false, onramp: false, send: false, history: false },
     themeMode: 'light',
-    themeVariables: { '--w3m-accent': '#2775CA', '--w3m-font-family': 'Figtree, system-ui, sans-serif' },
+    themeVariables: { '--w3m-accent': '#2775CA', '--w3m-font-family': 'Figtree, system-ui, sans-serif', '--w3m-z-index': 3000 },
   });
 
   watchAccount(state.wagmi, {
@@ -114,7 +118,7 @@ async function refreshBalance() {
   if (!acct.isConnected) return;
   try {
     const bal = await readContract(state.wagmi, {
-      address: state.cfg.network.usdc, abi: erc20Abi, functionName: 'balanceOf',
+      address: state.cfg.network.token.address, abi: erc20Abi, functionName: 'balanceOf',
       args: [acct.address], chainId: state.cfg.network.chainId,
     });
     state.balance = bal;
@@ -125,24 +129,52 @@ async function refreshBalance() {
 function friendlyWalletError(e) {
   const m = `${e?.shortMessage || ''} ${e?.message || ''}`.toLowerCase();
   if (m.includes('reject') || m.includes('denied') || m.includes('cancel')) return 'You cancelled the payment in your wallet. Nothing was sent.';
-  if (m.includes('insufficient') || m.includes('exceeds balance')) return `Your wallet doesn't have enough USDC or ETH for gas on ${state.cfg.network.name}.`;
+  if (m.includes('insufficient') || m.includes('exceeds balance')) return `Your wallet doesn't have enough ${SYM()}, or not enough ${GAS()} for the network fee, on ${state.cfg.network.name}.`;
   if (m.includes('chain') || m.includes('network')) return `Switch your wallet to ${state.cfg.network.name} and try again.`;
   return e?.shortMessage || 'Your wallet could not send the payment. Try again.';
 }
 
+const withTimeout = (promise, ms, label) => Promise.race([
+  promise,
+  new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error(label), { timeout: true })), ms)),
+]);
+
 async function pay() {
   const { cfg, wagmi, order, token } = state;
-  const acct = getAccount(wagmi);
+  let acct = getAccount(wagmi);
   if (!acct.isConnected) { state.appkit.open(); return; }
 
   state.error = null;
+  state.errorDetail = null;
   state.view = 'sending';
   renderSheet();
+
+  // Step 1: get the wallet onto the right network. Some in-app wallet browsers
+  // (Trust Wallet, for one) never answer this request, so don't wait forever.
+  if (acct.chainId !== cfg.network.chainId) {
+    try {
+      await withTimeout(switchChain(wagmi, { chainId: cfg.network.chainId }), 25000, 'network switch timed out');
+    } catch (e) {
+      state.error = `Your wallet is on a different network. In your wallet, switch the network to ${cfg.network.name}, then press Pay again.`;
+      state.errorDetail = e.shortMessage || e.message;
+      state.view = 'pay';
+      renderSheet();
+      return;
+    }
+    acct = getAccount(wagmi);
+    if (acct.chainId !== cfg.network.chainId) {
+      state.error = `Your wallet is still on another network. Switch it to ${cfg.network.name} manually, then press Pay again.`;
+      state.view = 'pay';
+      renderSheet();
+      return;
+    }
+  }
+
+  // Step 2: the token transfer itself.
   let hash;
   try {
-    if (acct.chainId !== cfg.network.chainId) await switchChain(wagmi, { chainId: cfg.network.chainId });
     hash = await writeContract(wagmi, {
-      address: cfg.network.usdc,
+      address: cfg.network.token.address,
       abi: erc20Abi,
       functionName: 'transfer',
       args: [cfg.recipient, BigInt(order.amount_units)],
@@ -150,6 +182,7 @@ async function pay() {
     });
   } catch (e) {
     state.error = friendlyWalletError(e);
+    state.errorDetail = e.shortMessage || e.message;
     state.view = 'pay';
     renderSheet();
     return;
@@ -206,7 +239,7 @@ async function loadProducts() {
   try {
     const { rate, products } = await api('/api/products');
     state.products = products;
-    $('#rate-note').textContent = `USDC prices use today's rate of ₹${Number(rate).toFixed(2)} per USDC. The price is locked when you reserve a card.`;
+    $('#rate-note').textContent = `${SYM()} prices use today's rate of ₹${Number(rate).toFixed(2)} per ${SYM()}. The price is locked when you reserve a card.`;
     renderFilters(); renderGrid(); renderHero();
   } catch (e) {
     $('#grid').innerHTML = `<p class="msg err">Cards couldn't load: ${esc(e.message)} Refresh the page to try again.</p>`;
@@ -231,7 +264,9 @@ function timeLeft() {
 function renderSheet() {
   const body = $('#sheet-body');
   const { cfg, order } = state;
-  const err = state.error ? `<p class="msg err" role="alert">${esc(state.error)}</p>` : '';
+  const err = state.error
+    ? `<div class="msg err" role="alert">${esc(state.error)}${state.errorDetail ? `<details class="small" style="margin-top:6px"><summary>Technical details</summary>${esc(String(state.errorDetail).slice(0, 400))}</details>` : ''}</div>`
+    : '';
 
   // ---- 1. reserve
   if (state.view === 'form') {
@@ -247,7 +282,7 @@ function renderSheet() {
         </div>
       </form>
       ${err}
-      <button class="btn btn-primary btn-block" id="reserve" type="button">Reserve card for ${esc(p.price_usdc)} USDC</button>
+      <button class="btn btn-primary btn-block" id="reserve" type="button">Reserve card for ${esc(p.price)} ${esc(SYM())}</button>
       <p class="small">We'll hold one code for you for ${cfg.orderTtlMin} minutes while you pay.</p>`;
     return;
   }
@@ -303,7 +338,7 @@ function renderSheet() {
     body.innerHTML = `
       <div class="amount-box">
         <span class="lbl">Payment sent</span>
-        <span class="amt">${esc(order.amount)}<small>USDC</small></span>
+        <span class="amt">${esc(order.amount)}<small>${esc(SYM())}</small></span>
       </div>
       <p class="msg info"><span class="spinner" aria-hidden="true"></span> Confirming your payment on ${esc(cfg.network.name)}. This usually takes under 15 seconds. You can keep this page open.</p>
       ${order.claimed_tx ? `<a class="tx-link" href="${cfg.network.explorer}/tx/${esc(order.claimed_tx)}" target="_blank" rel="noopener">View transaction on the explorer</a>` : ''}
@@ -322,11 +357,12 @@ function renderSheet() {
   const need = BigInt(order.amount_units);
   const lowBal = state.balance !== null && state.balance < need;
   const sending = state.view === 'sending';
+  const viaPhone = acct.connector?.id === 'walletConnect' || acct.connector?.type === 'walletConnect';
 
   body.innerHTML = `
     <div class="amount-box">
       <span class="lbl">Send exactly</span>
-      <span class="amt">${esc(order.amount)}<small>USDC</small></span>
+      <span class="amt">${esc(order.amount)}<small>${esc(SYM())}</small></span>
       <span class="meta">
         <span>For ${esc(product.brand)} ${inr(product.face_value_inr)}</span>
         <span>on ${esc(cfg.network.name)}</span>
@@ -335,21 +371,27 @@ function renderSheet() {
     </div>
     ${acct.isConnected ? `
       <div class="wallet-row">
-        <span>Wallet <code>${esc(short(acct.address))}</code>${state.balance !== null ? `, balance ${esc(formatUnits(state.balance, 6))} USDC` : ''}</span>
+        <span>Wallet <code>${esc(short(acct.address))}</code>${state.balance !== null ? `, balance ${esc(Number(formatUnits(state.balance, cfg.network.token.decimals)).toFixed(4))} ${esc(SYM())}` : ''}</span>
         <button class="link-btn" type="button" id="change-wallet">Change</button>
       </div>` : ''}
-    ${lowBal ? `<p class="msg warn">This wallet has less USDC than the order amount. Top it up or connect another wallet.</p>` : ''}
+    ${acct.isConnected && acct.chainId !== cfg.network.chainId ? `<p class="msg warn">Your wallet is on another network. Pressing Pay will ask to switch to ${esc(cfg.network.name)}. If nothing happens, switch the network to ${esc(cfg.network.name)} inside your wallet app yourself (in Trust Wallet: the network button at the top of the browser).</p>` : ''}
+    ${lowBal ? `<p class="msg warn">This wallet has less ${esc(SYM())} on ${esc(cfg.network.name)} than the order amount. Top it up or connect another wallet.</p>` : ''}
     ${err}
     <button class="btn btn-primary btn-block" id="pay" type="button" ${sending ? 'disabled' : ''}>
-      ${sending ? '<span class="spinner" aria-hidden="true"></span> Approve the payment in your wallet' : acct.isConnected ? `Pay ${esc(order.amount)} USDC` : 'Connect wallet to pay'}
+      ${sending ? '<span class="spinner" aria-hidden="true"></span> Waiting for your wallet' : acct.isConnected ? `Pay ${esc(order.amount)} ${esc(SYM())}` : 'Connect wallet to pay'}
     </button>
+    ${sending ? `
+      <p class="msg info">${viaPhone
+        ? `Open your wallet app on your phone and approve the request. It may first ask to switch to ${esc(cfg.network.name)}, then to send ${esc(SYM())}. If nothing shows up, open the wallet app manually and check for a pending request.`
+        : `Approve the request in your wallet. It may first ask to switch to ${esc(cfg.network.name)}, then to send ${esc(SYM())}.`}</p>
+      <button class="btn btn-ghost btn-block" type="button" id="cancel-wait">I closed it or nothing happened</button>` : ''}
     <details class="manual">
       <summary>Paying from an exchange or another app?</summary>
       <div class="inner">
-        <p>Send exactly <strong>${esc(order.amount)} USDC</strong> on <strong>${esc(cfg.network.name)}</strong> to this address. The order is matched by the exact amount, so it must arrive to the last digit. If your exchange deducts a withdrawal fee from the amount, add it on top.</p>
+        <p>Send exactly <strong>${esc(order.amount)} ${esc(SYM())}</strong> on <strong>${esc(cfg.network.name)}</strong> to this address. The order is matched by the exact amount, so it must arrive to the last digit. If your exchange deducts a withdrawal fee from the amount, add it on top.</p>
         <div class="copy-line"><code>${esc(cfg.recipient)}</code><button class="btn btn-ghost btn-sm" type="button" data-copy="${esc(cfg.recipient)}" data-label="Address copied">Copy</button></div>
         <div class="copy-line"><code>${esc(order.amount)}</code><button class="btn btn-ghost btn-sm" type="button" data-copy="${esc(order.amount)}" data-label="Amount copied">Copy</button></div>
-        <p>Only send USDC on ${esc(cfg.network.name)}. Other tokens or networks can't be matched to your order.</p>
+        <p>Only send ${esc(SYM())} on ${esc(cfg.network.name)}. Other tokens or networks can't be matched to your order.</p>
       </div>
     </details>
     <p class="small">Order ID: ${esc(order.id)}</p>`;
@@ -394,12 +436,22 @@ async function pollOrder() {
   } catch { /* try again next tick */ }
 }
 
+// The sheet is opened with show() (non-modal), not showModal(). A modal dialog
+// makes everything outside it inert, and the wallet popup lives outside it,
+// which made "Connect wallet" dead on mobile and froze the popup on desktop.
 function openSheet() {
   const d = $('#checkout');
-  if (!d.open) d.showModal();
+  if (!d.open) d.show();
+  $('#sheet-backdrop').hidden = false;
+  document.body.classList.add('sheet-open');
+  d.focus({ preventScroll: true });
 }
 function closeSheet() {
-  $('#checkout').close();
+  const d = $('#checkout');
+  if (d.open) d.close();
+}
+function isWalletPopupOpen() {
+  try { return !!state.appkit?.getState?.().open; } catch { return false; }
 }
 
 function startCheckout(productId) {
@@ -462,6 +514,10 @@ document.addEventListener('click', (e) => {
     case 'reserve': return reserve();
     case 'pay': return pay();
     case 'change-wallet': return state.appkit.open();
+    case 'cancel-wait':
+      state.view = 'pay';
+      state.error = "If you already approved the payment in your wallet, don't pay again: it will show up here within a minute.";
+      return renderSheet();
     case 'back-to-pay': state.view = 'pay'; state.confirmSince = null; state.order = { ...state.order, claimed_tx: null }; return renderSheet();
     case 'close-sheet': return closeSheet();
     case 'new-order': {
@@ -477,11 +533,16 @@ document.addEventListener('click', (e) => {
 });
 
 $('#checkout').addEventListener('close', () => {
+  $('#sheet-backdrop').hidden = true;
+  document.body.classList.remove('sheet-open');
   stopTimers();
   if (state.order && ['paid', 'expired'].includes(state.order.status)) history.replaceState(null, '', location.pathname);
 });
-// click on the backdrop closes the sheet
-$('#checkout').addEventListener('click', (e) => { if (e.target.id === 'checkout') closeSheet(); });
+// click on the backdrop or Escape closes the sheet (unless the wallet popup is on top)
+$('#sheet-backdrop').addEventListener('click', () => { if (!isWalletPopupOpen()) closeSheet(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && $('#checkout').open && !isWalletPopupOpen()) closeSheet();
+});
 
 // ---------------------------------------------------------------- boot
 (async function boot() {
@@ -494,10 +555,13 @@ $('#checkout').addEventListener('click', (e) => { if (e.target.id === 'checkout'
   const { cfg } = state;
   document.querySelectorAll('[data-store-name]').forEach((el) => { el.textContent = cfg.storeName; });
   document.querySelectorAll('[data-ttl]').forEach((el) => { el.textContent = `${cfg.orderTtlMin} minutes`; });
-  document.title = `${cfg.storeName}: gift cards below face value, paid in USDC`;
+  document.title = `${cfg.storeName}: gift cards below face value, paid in ${SYM()}`;
+  document.querySelectorAll('[data-token]').forEach((el) => { el.textContent = SYM(); });
+  document.querySelectorAll('[data-net]').forEach((el) => { el.textContent = cfg.network.name; });
   const pill = $('#net-pill');
-  pill.textContent = cfg.network.key === 'base' ? 'Pay with USDC on Base' : 'Test mode: Base Sepolia';
-  pill.classList.toggle('test', cfg.network.key !== 'base');
+  const isTest = cfg.network.key.includes('sepolia');
+  pill.textContent = isTest ? `Test mode: ${cfg.network.name}` : `Pay with ${SYM()} on ${cfg.network.name}`;
+  pill.classList.toggle('test', isTest);
   pill.hidden = false;
   if (readLastOrder()) $('#my-order').hidden = false;
 

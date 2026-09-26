@@ -15,6 +15,7 @@
     <span class="wordmark">Store admin</span>
     <div class="top-right">
       <span class="net-pill" id="net-pill" hidden></span>
+      <a class="nav-link" href="./deploy.html">Deploy contract</a>
       <button class="link-btn" id="refresh" type="button" hidden>Refresh</button>
       <button class="link-btn" id="logout" type="button" hidden>Log out</button>
     </div>
@@ -76,6 +77,41 @@
       </div>
     </section>
 
+    <section id="billing">
+      <h2>AI token billing</h2>
+      <div id="billing-status"></div>
+      <div class="two-col" style="margin-top:16px">
+        <div class="panel">
+          <h3 class="panel-h">Record usage</h3>
+          <div class="field"><label for="u-wallet">Customer</label><select id="u-wallet"></select></div>
+          <div class="row">
+            <div class="field"><label for="u-tokens">Tokens used</label><input id="u-tokens" type="number" min="1" step="1" inputmode="numeric" /></div>
+            <div class="field"><label for="u-note">Note (optional)</label><input id="u-note" maxlength="200" placeholder="e.g. chat, 26 Sep" /></div>
+          </div>
+          <p class="small" id="u-cost"></p>
+          <button class="btn btn-primary" id="add-usage" type="button">Add usage</button>
+        </div>
+        <div class="panel">
+          <h3 class="panel-h">Billing settings</h3>
+          <div class="row">
+            <div class="field"><label for="s-price">Price per 1,000 tokens</label><input id="s-price" type="number" min="0" step="0.0001" /></div>
+            <div class="field"><label for="s-approve">Default approval</label><input id="s-approve" type="number" min="1" step="1" /></div>
+          </div>
+          <div class="row">
+            <div class="field"><label for="s-charge">Default max per charge</label><input id="s-charge" type="number" min="1" step="1" /></div>
+            <div class="field"><label for="s-period">Default max per 30 days</label><input id="s-period" type="number" min="1" step="1" /></div>
+          </div>
+          <p class="small">New prices apply to usage recorded from now on. Defaults only pre-fill the customer's form; each customer sets their own limits on-chain.</p>
+          <button class="btn btn-ghost" id="save-billing" type="button">Save settings</button>
+        </div>
+      </div>
+      <h3 class="sub-h">Customers</h3>
+      <p class="small" style="margin-bottom:10px">"Can charge now" is the most the contract will allow right now (due amount, customer limits, approval and balance). Leave the amount empty to charge that, or type a smaller amount.</p>
+      <div class="table-wrap"><table id="billing-accounts"></table></div>
+      <h3 class="sub-h">Charges</h3>
+      <div class="table-wrap"><table id="billing-charges"></table></div>
+    </section>
+
     <section>
       <h2>Orders</h2>
       <div class="table-wrap"><table id="orders"></table></div>
@@ -83,7 +119,7 @@
 
     <section>
       <h2>Payments with no matching order</h2>
-      <p class="small" style="margin-bottom:12px">USDC that reached your wallet but didn't match any order, usually a wrong amount or a payment more than 24 hours late. Check with the customer and refund or deliver manually.</p>
+      <p class="small" style="margin-bottom:12px">Payments that reached your wallet but didn't match any order, usually a wrong amount or a payment more than 24 hours late. Check with the customer and refund or deliver manually.</p>
       <div class="table-wrap"><table id="unmatched"></table></div>
     </section>
   </main>

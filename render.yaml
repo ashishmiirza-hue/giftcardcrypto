@@ -15,21 +15,19 @@ services:
       - key: NODE_VERSION
         value: "22"
       - key: NETWORK
-        value: base
+        value: bsc
       - key: TRUST_PROXY
         value: "1"
-      - key: CONFIRMATIONS
-        value: "2"
       - key: POLL_INTERVAL_MS
         value: "10000"
       - key: ORDER_TTL_MIN
         value: "30"
-      - key: USDC_INR_FALLBACK
-        value: "100"
+      - key: INR_RATE_FALLBACK
+        value: "96"
       - key: STORE_NAME
         value: Tohfa
-      # Khaali chhodo to free public RPC (https://mainnet.base.org) use hoga.
-      # Ankr: https://rpc.ankr.com/base/YOUR_KEY
+      # Khaali chhodo to free public RPC (https://bsc.drpc.org) use hoga.
+      # Ankr: https://rpc.ankr.com/bsc/YOUR_KEY
       - key: RPC_URL
         sync: false
       - key: RECEIVING_WALLET
@@ -37,6 +35,13 @@ services:
       - key: REOWN_PROJECT_ID
         sync: false
       - key: ADMIN_KEY
+        sync: false
+      # ---- AI token billing (contracts/README.md) ----
+      - key: BILLING_CONTRACT
+        sync: false
+      - key: KEEPER_PRIVATE_KEY
+        sync: false
+      - key: SERVICE_API_KEY
         sync: false
     # Asli customers ke liye: plan "starter" karo aur ye disk lagao, taaki
     # orders/codes restart par delete na hon. Saath mein DB_PATH=/var/data/store.db

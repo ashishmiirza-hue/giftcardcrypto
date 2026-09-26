@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI tokens, billed from your wallet</title>
+  <meta name="description" content="Use AI tokens and pay in USDT from your own wallet. Approve once, set your own limits, cancel any time." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Figtree:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <header class="top">
+    <a class="wordmark" href="/" data-store-name>Tohfa</a>
+    <div class="top-right">
+      <span class="net-pill" id="net-pill" hidden></span>
+      <a class="nav-link" href="/">Gift cards</a>
+    </div>
+  </header>
+
+  <main class="ai">
+    <section class="ai-hero">
+      <div>
+        <h1>AI tokens. Pay only for what you use.</h1>
+        <p class="lede">Approve once from your wallet and set your own spending limits. We bill your usage in <span data-token>USDT</span>, and can never take more than the limits you set on-chain.</p>
+      </div>
+      <div class="price-card" aria-live="polite">
+        <span class="k">Price</span>
+        <span class="v"><span id="price">…</span> <span data-token>USDT</span></span>
+        <span class="k">per 1,000 tokens</span>
+      </div>
+    </section>
+
+    <section class="ai-grid">
+      <div class="panel ai-setup" id="setup">
+        <h2>Set up billing</h2>
+        <p class="small" id="setup-intro">Four steps, about a minute. You'll confirm two requests in your wallet.</p>
+        <ol class="setup-steps" id="setup-steps"></ol>
+        <div id="setup-body"></div>
+      </div>
+
+      <aside class="ai-trust">
+        <h2>How your limits protect you</h2>
+        <ul class="plain">
+          <li><strong>Per charge.</strong> A single bill can never be larger than the amount you choose.</li>
+          <li><strong>Per 30 days.</strong> The total billed in any 30-day window stops at your cap.</li>
+          <li><strong>Straight to the store.</strong> Payments can only go to the store's treasury address, set in the contract.</li>
+          <li><strong>Cancel any time.</strong> Cancel here, or revoke the <span data-token>USDT</span> approval from your wallet, and no further charges can go through.</li>
+        </ul>
+        <p class="small" id="contract-line"></p>
+      </aside>
+    </section>
+
+    <section class="panel ai-dash" id="dashboard" hidden>
+      <div class="dash-head">
+        <h2>Your usage</h2>
+        <button class="link-btn" type="button" id="refresh">Refresh</button>
+      </div>
+      <div class="stats" id="dash-stats"></div>
+      <div class="dash-cols">
+        <div>
+          <h3>API key</h3>
+          <p class="small" id="key-line">Use this key with our AI service. Keep it private.</p>
+          <div id="key-box"></div>
+          <button class="btn btn-ghost btn-sm" type="button" id="new-key">Create API key</button>
+        </div>
+        <div>
+          <h3>Limits</h3>
+          <div id="limit-box"></div>
+          <div class="row" style="margin-top:12px">
+            <button class="btn btn-ghost btn-sm" type="button" id="edit-limits">Change limits</button>
+            <button class="btn btn-ghost btn-sm danger" type="button" id="cancel-billing">Cancel billing</button>
+          </div>
+        </div>
+      </div>
+      <h3>Recent usage</h3>
+      <div class="table-wrap"><table id="usage-table"></table></div>
+      <h3>Charges</h3>
+      <div class="table-wrap"><table id="charge-table"></table></div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p>Charges are made by the store's billing contract on <span data-net>BNB Smart Chain</span>, only within the limits you set. Every charge has a transaction you can check on the explorer.</p>
+  </footer>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="/src/ai.js"></script>
+</body>
+</html>

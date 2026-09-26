@@ -264,3 +264,26 @@ td input { font: inherit; width: 80px; padding: 6px 8px; border: 1px solid var(-
 @media (max-width: 860px) { .two-col { grid-template-columns: 1fr; } }
 .admin-top { max-width: 1200px; }
 .stat .v a { font-size: 1.05rem; }
+
+.panel-h { font-size: 1.1rem; font-weight: 700; }
+.sub-h { font-size: 1.1rem; font-weight: 700; margin: 24px 0 10px; }
+.problems { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+td .amt-in { width: 90px; }
+.pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: .8rem; font-weight: 600; }
+.pill.on { background: #E7F4EE; color: var(--ok); }
+.pill.off { background: #FDECEA; color: var(--bad); }
+.status.sent { color: var(--usdc-deep); }
+.status.failed { color: var(--bad); }
+
+/* ---------- deploy page ---------- */
+.deploy { max-width: 760px; gap: 20px; }
+.deploy .intro { font-size: .95rem; }
+.deploy h2 { display: flex; align-items: center; gap: 10px; font-size: 1.2rem; margin: 0; }
+.num { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--ink); color: #fff; font: 700 .9rem var(--body); }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9rem; overflow-wrap: anywhere; }
+.secret { border: 2px dashed var(--warn); border-radius: var(--r-sm); padding: 14px; display: flex; flex-direction: column; gap: 10px; background: #FFFBF2; }
+.env-lines { background: var(--ink); color: #E8ECF4; border-radius: var(--r-sm); padding: 14px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .88rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.nav-link { font-weight: 600; font-size: .95rem; color: var(--ink); text-decoration: none; }
+.nav-link:hover { text-decoration: underline; }
+.deploy h3 { font-size: 1.05rem; font-weight: 700; margin: 14px 0 0; }
+.deploy table { margin-top: 4px; }

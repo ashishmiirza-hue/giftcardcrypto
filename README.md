@@ -1,6 +1,8 @@
 # Tohfa: Crypto se gift card store
 
-Customer USDC (Base network) se gift card khareedta hai. Payment **Reown/WalletConnect** se hoti hai, aur verification tumhara apna server blockchain se karta hai (Ankr ya Base ka free public RPC). Payment confirm hote hi code screen par aa jata hai.
+Customer **USDT (BEP-20, BNB Smart Chain)** se gift card khareedta hai: wallet connect karke (Reown/WalletConnect), ya exchange/Trust Wallet se seedha address par bhej ke. Verification tumhara apna server blockchain se karta hai. Payment confirm hote hi code screen par aa jata hai.
+
+Network `NETWORK` setting se badalta hai: `bsc` (USDT, default), `base` (USDC), `base-sepolia` (free test USDC).
 
 ```
 giftcardcrypto/          <- GitHub repo ka top level yahi hona chahiye
@@ -16,7 +18,7 @@ Repo ke top level par in ke alawa aur kuch nahi hona chahiye. Pehle galti se upl
 
 ---
 
-## Render par deploy (ek service, mainnet)
+## Render par deploy (ek service, BSC USDT)
 
 Ek hi Render service store, admin aur backend teeno chalati hai:
 - Store: `https://<service>.onrender.com/`
@@ -38,12 +40,12 @@ Ek hi Render service store, admin aur backend teeno chalati hai:
 | Key | Value |
 |---|---|
 | `NODE_VERSION` | `22` |
-| `NETWORK` | `base` |
+| `NETWORK` | `bsc` |
 | `RECEIVING_WALLET` | tumhara wallet address (`0x...`), private key nahi |
 | `REOWN_PROJECT_ID` | Reown dashboard ka Project ID |
 | `ADMIN_KEY` | 16+ characters ka password |
-| `RPC_URL` | khaali chhodo (free public RPC), ya Ankr: `https://rpc.ankr.com/base/KEY` |
-| `USDC_INR_FALLBACK` | `100` |
+| `RPC_URL` | khaali chhodo (free public RPC), ya Ankr: `https://rpc.ankr.com/bsc/KEY` |
+| `INR_RATE_FALLBACK` | `96` |
 
 Save ke baad **Manual Deploy → Clear build cache & deploy**.
 
@@ -53,13 +55,15 @@ Save ke baad **Manual Deploy → Clear build cache & deploy**.
 
 ---
 
-## Pehla asli test (1 USDC)
+## Pehla asli test (1 USDT)
 
 1. `/admin/` kholo aur login karo.
-2. **New card** banao: Face value ₹100, Discount 0. Price lagbhag 1 USDC aayegi.
+2. **New card** banao: Face value ₹100, Discount 0. Price lagbhag 1 USDT aayegi.
 3. Us card mein ek code daalo, jaise `TEST-001`. Sample cards ka **Shown** off kar do.
-4. Doosre wallet mein **Base network** par 2-3 USDC aur thoda ETH (gas) rakho.
+4. Doosre wallet (Trust/MetaMask) mein **BNB Smart Chain** par 2-3 USDT aur thoda **BNB** (gas, ₹20-50 ka kaafi) rakho.
 5. Store par ₹100 wala card khareedo. 5-15 second mein code screen par aana chahiye.
+
+Exchange se test: checkout mein "Paying from an exchange" kholo, address aur exact amount copy karo, aur exchange se **USDT, network BEP-20 (BSC)** withdraw karo. Exchange fee amount se kaat de to order match nahi hoga, isliye fee upar se jodna.
 
 ---
 
@@ -81,11 +85,15 @@ Testnet par free test karna ho: `NETWORK=base-sepolia`, test USDC faucet.circle.
 ---
 
 ## Payment kaise verify hoti hai
-1. Card reserve karne par server ek **unique amount** deta hai, jaise `1.0537 USDC`. Last digits se order pehchana jata hai.
+1. Card reserve karne par server ek **unique amount** deta hai, jaise `1.0537 USDT`. Last digits se order pehchana jata hai.
 2. Customer pay karta hai, browser txHash server ko bhejta hai.
-3. Server blockchain se check karta hai: transaction successful hai, asli USDC contract hai, paisa tumhare wallet mein aaya, amount exact hai, aur txHash pehle use nahi hua. Browser ki kisi baat par bharosa nahi kiya jata.
-4. **Backup listener** har 10 second tumhare wallet mein aaye USDC padhta hai. Tab band ho jaye ya exchange se payment aaye, tab bhi order confirm hota hai.
+3. Server blockchain se check karta hai: transaction successful hai, asli USDT contract hai (fake "USDT" token nahi chalega), paisa tumhare wallet mein aaya, amount exact hai, aur txHash pehle use nahi hua. Browser ki kisi baat par bharosa nahi kiya jata.
+4. **Backup listener** har 10 second tumhare wallet mein aaye USDT padhta hai. Tab band ho jaye ya exchange se payment aaye, tab bhi order confirm hota hai.
 5. Jo payment kisi order se match nahi hoti, wo admin panel mein **"Payments with no matching order"** mein dikhti hai.
+
+## AI token billing (approve + limits + admin se charge)
+
+Site par `/ai.html` page hai jahan customer wallet se USDT approve karke apni limits set karta hai. Tum admin panel ke **AI token billing** section se usage record karke **Charge** dabate ho. Contract deploy karne aur test karne ke poore steps: **`contracts/README.md`**.
 
 ## Free plan ki limitation
 Render free par 15 minute baad service so jaati hai, aur restart/sleep par **database reset** hota hai (orders, codes mit jaate hain). Test ke liye theek hai. Asli customers se pehle **Starter plan + disk** lo (`render.yaml` mein disk wala hissa uncomment karo, `DB_PATH=/var/data/store.db`).

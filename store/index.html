@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Tohfa: gift cards below face value, paid in USDC</title>
-  <meta name="description" content="Buy gift cards for less than their rupee value and pay with USDC from any crypto wallet. Your code appears on screen seconds after payment." />
+  <title>Tohfa: gift cards below face value, paid in USDT</title>
+  <meta name="description" content="Buy gift cards for less than their rupee value and pay with USDT from any crypto wallet. Your code appears on screen seconds after payment." />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎁</text></svg>" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -18,6 +18,7 @@
     <a class="wordmark" href="/" data-store-name>Tohfa</a>
     <div class="top-right">
       <span class="net-pill" id="net-pill" hidden></span>
+      <a class="nav-link" href="/ai.html">AI tokens</a>
       <button class="link-btn" id="my-order" type="button" hidden>My last order</button>
     </div>
   </header>
@@ -26,7 +27,7 @@
     <section class="hero">
       <div class="hero-copy">
         <h1>Gift cards for less than they're worth.</h1>
-        <p class="lede">Pay in USDC from any crypto wallet. The card code shows up on this page a few seconds after your payment confirms. No account needed.</p>
+        <p class="lede">Pay in <span data-token>USDT</span> from any crypto wallet or exchange. The card code shows up on this page a few seconds after your payment confirms. No account needed.</p>
         <a class="btn btn-primary" href="#catalog">Browse cards</a>
       </div>
       <div class="hero-ticket" id="hero-ticket" aria-hidden="true"></div>
@@ -47,7 +48,7 @@
       <h2 id="how-h">How buying works</h2>
       <ol class="steps">
         <li><h3>Pick a card</h3><p>We hold one code for you for <span data-ttl>30 minutes</span> while you pay.</p></li>
-        <li><h3>Pay the exact USDC amount</h3><p>Connect your wallet and approve one transfer on the Base network. Each order has a unique amount, down to the last digit.</p></li>
+        <li><h3>Pay the exact <span data-token>USDT</span> amount</h3><p>Connect your wallet and approve one transfer on <span data-net>BNB Smart Chain</span>, or send it from your exchange. Each order has a unique amount, down to the last digit.</p></li>
         <li><h3>We check the blockchain</h3><p>Our server confirms the payment on-chain itself. It usually takes under 15 seconds.</p></li>
         <li><h3>Copy your code</h3><p>The code appears on screen. Keep the order link to see it again later.</p></li>
       </ol>
@@ -55,11 +56,12 @@
   </main>
 
   <footer class="foot">
-    <p>Payments are in USDC on Base. Crypto transfers can't be reversed, so send the exact amount shown. Wrong amount or a problem with a code? Contact support with your order ID.</p>
+    <p>Payments are in <span data-token>USDT</span> on <span data-net>BNB Smart Chain</span>. Crypto transfers can't be reversed, so send the exact amount shown. Wrong amount or a problem with a code? Contact support with your order ID.</p>
     <p class="foot-small"><span data-store-name>Tohfa</span> is not affiliated with the brands listed. All trademarks belong to their owners.</p>
   </footer>
 
-  <dialog class="sheet" id="checkout" aria-labelledby="sheet-title">
+  <div class="sheet-backdrop" id="sheet-backdrop" hidden></div>
+  <dialog class="sheet" id="checkout" aria-labelledby="sheet-title" aria-modal="true" tabindex="-1">
     <div class="sheet-inner">
       <div class="sheet-head">
         <h2 id="sheet-title">Checkout</h2>

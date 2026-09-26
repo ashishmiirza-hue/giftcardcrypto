@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS orders (
   access_token   TEXT NOT NULL,
   product_id     INTEGER NOT NULL REFERENCES products(id),
   email          TEXT,
-  amount_units   TEXT NOT NULL,          -- exact USDC amount in base units (6 decimals)
+  amount_units   TEXT NOT NULL,          -- exact token amount in base units (USDT on BSC = 18 decimals)
   usdc_inr_rate  REAL NOT NULL,
   status         TEXT NOT NULL DEFAULT 'pending', -- pending | paid | needs_code | expired
   claimed_tx     TEXT,                   -- txHash sent by the browser (not trusted until verified)
@@ -83,6 +83,40 @@ CREATE TABLE IF NOT EXISTS unmatched_payments (
   block_number INTEGER NOT NULL,
   seen_at      INTEGER NOT NULL
 );
+
+-- ---------- AI token billing ----------
+CREATE TABLE IF NOT EXISTS billing_accounts (
+  wallet        TEXT PRIMARY KEY,      -- lowercase 0x address
+  label         TEXT,
+  email         TEXT,
+  api_key_hash  TEXT UNIQUE,
+  api_key_hint  TEXT,                  -- last 4 chars, to recognise the key
+  blocked       INTEGER NOT NULL DEFAULT 0,
+  created_at    INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS usage_events (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  wallet      TEXT NOT NULL,
+  tokens      INTEGER NOT NULL,
+  cost_units  TEXT NOT NULL,           -- token base units (USDT: 18 decimals)
+  note        TEXT,
+  source      TEXT NOT NULL DEFAULT 'admin',   -- admin | api
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_usage_wallet ON usage_events(wallet, created_at);
+
+CREATE TABLE IF NOT EXISTS billing_charges (
+  id           TEXT PRIMARY KEY,       -- bytes32 invoice id sent to the contract
+  wallet       TEXT NOT NULL,
+  amount_units TEXT NOT NULL,
+  status       TEXT NOT NULL,          -- pending | sent | paid | failed
+  tx_hash      TEXT,
+  error        TEXT,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_charges_wallet ON billing_charges(wallet, created_at);
 
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,

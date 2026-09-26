@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { db } from './db.js';
 import { config } from './config.js';
-import { getRate, priceUnits, formatUnits } from './pricing.js';
+import { getRate, priceUnits, formatUnits, TAIL_STEP } from './pricing.js';
 
 const lateMs = () => config.latePaymentHours * 3600 * 1000;
 
@@ -33,11 +33,11 @@ export const createOrder = db.transaction((productId, email) => {
   const { rate } = getRate();
   const base = priceUnits(product, rate);
 
-  // Add a unique 0.0001–0.0099 USDC tail so the amount identifies the order.
-  // (1 unit = 0.000001 USDC, so 0.0001 = 100 units; 99 open orders per price point.)
+  // Add a unique 0.0001–0.0099 tail so the exact amount identifies the order
+  // (99 open orders per price point).
   let amount = null;
   for (let i = 0; i < 300; i++) {
-    const candidate = (base + BigInt(crypto.randomInt(1, 100)) * 100n).toString();
+    const candidate = (base + BigInt(crypto.randomInt(1, 100)) * TAIL_STEP).toString();
     if (!amountTaken(candidate, now)) { amount = candidate; break; }
   }
   if (!amount) throw new OrderError(503, 'Too many open orders at this price. Try again in a minute.');

@@ -10,6 +10,7 @@ import {
   createOrder, getOrderForCustomer, publicOrder, fulfillWaiting, OrderError,
 } from './orders.js';
 import { verifyClaim, startListener, chainStatus } from './chain.js';
+import { mountBilling, BillingError } from './billing.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -25,7 +26,7 @@ app.use((req, res, next) => {
   if (origin && config.allowedOrigins.includes(origin)) {
     res.set('Access-Control-Allow-Origin', origin);
     res.set('Vary', 'Origin');
-    res.set('Access-Control-Allow-Headers', 'content-type, x-admin-key');
+    res.set('Access-Control-Allow-Headers', 'content-type, x-admin-key, x-service-key, authorization');
     res.set('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
     if (req.method === 'OPTIONS') return res.sendStatus(204);
   }
@@ -57,7 +58,7 @@ setInterval(() => hits.clear(), 60 * 60 * 1000);
 
 const wrap = (fn) => (req, res) =>
   Promise.resolve().then(() => fn(req, res)).catch((e) => {
-    if (e instanceof OrderError) return res.status(e.status).json({ error: e.message });
+    if (e instanceof OrderError || e instanceof BillingError) return res.status(e.status).json({ error: e.message });
     console.error(e);
     res.status(500).json({ error: 'Something went wrong on our side. Try again.' });
   });
@@ -78,7 +79,7 @@ function productRow(p, rate) {
   return {
     id: p.id, name: p.name, brand: p.brand, category: p.category,
     face_value_inr: p.face_value_inr, discount_pct: p.discount_pct, color: p.color,
-    price_usdc: formatUnits(priceUnits(p, rate)),
+    price: formatUnits(priceUnits(p, rate)),
     in_stock: stock,
   };
 }
@@ -114,7 +115,7 @@ app.post('/api/orders/:id/tx', rateLimit(20, 10 * 60 * 1000), wrap((req, res) =>
   if (order.tx_hash) return res.json({ order: publicOrder(order) });
 
   // The hash is only a hint. Nothing is marked paid until the chain confirms
-  // the exact amount reached our wallet in real USDC.
+  // the exact amount reached our wallet in the real token contract.
   db.prepare('UPDATE orders SET claimed_tx = ? WHERE id = ?').run(txHash, order.id);
   verifyClaim(txHash);
   res.json({ order: publicOrder({ ...order, claimed_tx: txHash }) });
@@ -128,6 +129,9 @@ function admin(req, res, next) {
   next();
 }
 app.use('/api/admin', rateLimit(120, 60 * 1000), admin);
+
+// AI token billing (public, service and admin routes)
+mountBilling(app, { wrap, rateLimit });
 
 app.get('/api/admin/overview', (req, res) => {
   const { rate, source, updatedAt } = getRate();
@@ -144,12 +148,13 @@ app.get('/api/admin/overview', (req, res) => {
     ORDER BY o.created_at DESC LIMIT 200`).all().map((o) => ({ ...o, amount: formatUnits(o.amount_units) }));
   const unmatched = db.prepare('SELECT * FROM unmatched_payments ORDER BY seen_at DESC LIMIT 100').all()
     .map((u) => ({ ...u, amount: formatUnits(u.value_units) }));
-  const totals = db.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(CAST(amount_units AS INTEGER)), 0) AS units
-                             FROM orders WHERE status IN ('paid','needs_code')`).get();
+  // Summed as BigInt: 18-decimal amounts overflow SQLite integers.
+  const paidRows = db.prepare(`SELECT amount_units FROM orders WHERE status IN ('paid','needs_code')`).all();
+  const totals = { n: paidRows.length, units: paidRows.reduce((a, r) => a + BigInt(r.amount_units), 0n) };
   res.json({
     rate: { rate, source, updatedAt },
     network: config.network, wallet: config.wallet, chain: chainStatus,
-    totals: { orders: totals.n, usdc: formatUnits(totals.units) },
+    totals: { orders: totals.n, received: formatUnits(totals.units) },
     products, orders, unmatched,
   });
 });

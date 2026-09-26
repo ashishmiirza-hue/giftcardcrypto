@@ -1,21 +1,21 @@
 import { config } from './config.js';
 
-let rate = config.usdcInrFallback;
+let rate = config.inrFallback;
 let source = 'fallback';
 let updatedAt = 0;
 
 // Two free sources; if both fail (rate limits on shared hosts are common),
-// the last good rate or USDC_INR_FALLBACK is used.
+// the last good rate or INR_RATE_FALLBACK is used.
 const SOURCES = [
   {
     name: 'coinbase',
-    url: 'https://api.coinbase.com/v2/exchange-rates?currency=USDC',
+    url: `https://api.coinbase.com/v2/exchange-rates?currency=${config.network.price.coinbase}`,
     read: (d) => Number(d?.data?.rates?.INR),
   },
   {
     name: 'coingecko',
-    url: 'https://api.coingecko.com/api/v3/simple/price?ids=usd-coin&vs_currencies=inr',
-    read: (d) => Number(d?.['usd-coin']?.inr),
+    url: `https://api.coingecko.com/api/v3/simple/price?ids=${config.network.price.coingecko}&vs_currencies=inr`,
+    read: (d) => Number(d?.[config.network.price.coingecko]?.inr),
   },
 ];
 
@@ -48,16 +48,22 @@ export function getRate() {
   return { rate, source, updatedAt };
 }
 
-/** Price in USDC base units (6 decimals), rounded UP to the nearest cent. */
-export function priceUnits(product, usdcInr = rate) {
+const DEC = BigInt(config.network.token.decimals);
+const ONE = 10n ** DEC;              // 1 token in base units
+export const CENT = 10n ** (DEC - 2n); // 0.01 token
+export const TAIL_STEP = 10n ** (DEC - 4n); // 0.0001 token
+
+/** Price in token base units, rounded UP to the nearest cent. */
+export function priceUnits(product, inrPerToken = rate) {
   const inr = product.face_value_inr * (1 - product.discount_pct / 100);
-  const cents = Math.ceil((inr / usdcInr) * 100);
-  return BigInt(cents) * 10000n; // 1 cent = 10_000 units
+  const cents = Math.ceil((inr / inrPerToken) * 100);
+  return BigInt(cents) * CENT;
 }
 
+/** Base units -> "12.3456" (at least 2 decimals, no trailing zeros beyond that). */
 export function formatUnits(units) {
   const u = BigInt(units);
-  const whole = u / 1_000_000n;
-  const frac = (u % 1_000_000n).toString().padStart(6, '0').replace(/0+$/, '');
-  return frac ? `${whole}.${frac.padEnd(2, '0')}` : `${whole}.00`;
+  const whole = u / ONE;
+  const frac = (u % ONE).toString().padStart(Number(DEC), '0').replace(/0+$/, '');
+  return `${whole}.${frac.padEnd(2, '0')}`;
 }
