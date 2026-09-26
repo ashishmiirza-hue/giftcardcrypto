@@ -50,6 +50,10 @@ async function refreshWallet() {
     S.account = await S.signer.getAddress();
     S.chainId = Number((await S.provider.getNetwork()).chainId);
     S.balance = await S.provider.getBalance(S.account);
+    if (S.pendingOpen && S.chainId === S.cfg.network.chainId && !S.deployed) {
+      const addr = S.pendingOpen; S.pendingOpen = null;
+      await loadContract(addr, { quiet: true });
+    }
     if (!$('#treasury').value) $('#treasury').value = S.cfg?.recipient || S.account;
   } catch { /* shown as not connected */ }
   render();
@@ -105,14 +109,56 @@ async function deploy() {
     // Read back what the chain actually stored
     const live = new Contract(address, BUILD.abi, S.provider);
     const [token, treasury, keeper, owner] = await Promise.all([live.token(), live.treasury(), live.keeper(), live.owner()]);
-    S.deployed = { address, tx: tx?.hash, token, treasury, keeper, owner };
-    try { localStorage.setItem('tohfa:deployed-billing', JSON.stringify(S.deployed)); } catch { /* ignore */ }
+    S.deployed = { address, tx: tx?.hash, token, treasury, keeper, owner, paused: false };
+    try { localStorage.setItem(SAVED_KEY, JSON.stringify({ address, tx: tx?.hash })); } catch { /* ignore */ }
     toast('Contract deployed');
   } catch (e) {
     S.error = friendly(e);
   } finally {
     S.busy = null; render();
   }
+}
+
+const SAVED_KEY = 'tohfa:deployed-billing';
+
+/** Read an already-deployed TokenBilling contract from the chain. */
+async function loadContract(address, { quiet = false } = {}) {
+  if (!isAddress(address)) { if (!quiet) { S.error = 'That is not a valid contract address.'; render(); } return false; }
+  if (!S.provider || !S.account) { if (!quiet) { S.error = 'Connect your wallet in step 1 first.'; render(); } return false; }
+  if (S.chainId !== S.cfg.network.chainId) { if (!quiet) { S.error = `Switch your wallet to ${S.cfg.network.name} first.`; render(); } return false; }
+  try {
+    const live = new Contract(getAddress(address), BUILD.abi, S.provider);
+    const [token, treasury, keeper, owner, paused] = await Promise.all([live.token(), live.treasury(), live.keeper(), live.owner(), live.paused()]);
+    S.deployed = { address: getAddress(address), tx: S.deployed?.address === getAddress(address) ? S.deployed.tx : null, token, treasury, keeper, owner, paused };
+    try { localStorage.setItem(SAVED_KEY, JSON.stringify({ address: S.deployed.address, tx: S.deployed.tx })); } catch { /* ignore */ }
+    S.error = null;
+    render();
+    return true;
+  } catch (e) {
+    if (!quiet) { S.error = `Couldn't read a billing contract at that address on ${S.cfg.network.name}. ${e.shortMessage || ''}`; render(); }
+    return false;
+  }
+}
+
+async function ownerTx(label, fn) {
+  S.busy = label; S.error = null; render();
+  try {
+    const c = new Contract(S.deployed.address, BUILD.abi, S.signer);
+    const tx = await fn(c);
+    await tx.wait();
+    await loadContract(S.deployed.address, { quiet: true });
+    toast('Done');
+  } catch (e) { S.error = friendly(e); }
+  S.busy = null; render();
+}
+
+function changeKeeper() {
+  const k = $('#keeper').value.trim();
+  if (!isAddress(k)) { S.error = 'Create a new keeper wallet in step 2 first (or paste a keeper address there).'; return render(); }
+  if (S.keeperSecret && getAddress(k) === getAddress(S.keeperSecret.address) && !S.keeperSecret.saved) { S.error = "Save the new keeper's private key and tick the box in step 2 first."; return render(); }
+  if (getAddress(k) === getAddress(S.deployed.keeper)) { S.error = 'That is already the keeper.'; return render(); }
+  if (!confirm(`Change the keeper to ${k}?\n\nThe old keeper stops working immediately. Put the new keeper's private key in Render afterwards.`)) return;
+  return ownerTx('keeper', (c) => c.setKeeper(getAddress(k)));
 }
 
 async function fundKeeper() {
@@ -173,6 +219,15 @@ function render() {
       </tbody></table>
       ${ok ? '' : '<p class="msg err">Could not read back all values. Check the contract on the explorer.</p>'}
 
+      ${d.paused ? '<p class="msg err">Billing is paused. Charges will fail until you unpause.</p>' : ''}
+      ${S.account && getAddress(S.account) === getAddress(d.owner) ? `
+        <h3>Owner controls</h3>
+        <p class="small">Lost the keeper key, or think it leaked? Create a new keeper wallet in step 2, tick the box, then change the keeper here. No need to deploy again.</p>
+        <div class="row">
+          <button class="btn btn-ghost btn-sm" id="set-keeper" type="button" ${S.busy ? 'disabled' : ''}>${S.busy === 'keeper' ? '<span class="spinner"></span> Confirm in wallet' : 'Change keeper to the address in step 2'}</button>
+          <button class="btn btn-ghost btn-sm ${d.paused ? '' : 'danger'}" id="toggle-pause" type="button" ${S.busy ? 'disabled' : ''}>${S.busy === 'pause' ? '<span class="spinner"></span> Confirm in wallet' : d.paused ? 'Unpause billing' : 'Pause all billing'}</button>
+        </div>` : `<p class="small">Connect the owner wallet (${esc(short(d.owner))}) to change the keeper or pause billing.</p>`}
+
       <h3>Give the keeper gas money</h3>
       <p class="small">The keeper pays a tiny ${esc(net.gasToken)} fee for each charge.</p>
       <div class="row">
@@ -184,7 +239,8 @@ function render() {
       <div class="env-lines">${esc(env)}</div>
       <button class="btn btn-ghost btn-sm" type="button" data-copy="${esc(env)}">Copy all</button>
       <p class="small">Also add SERVICE_API_KEY (any long password). Save, let Render redeploy, then check the AI token billing section in the admin panel.</p>
-      ${err}`;
+      ${err}
+      <p class="small"><button class="link-btn" id="new-deploy" type="button">Deploy a different contract instead</button></p>`;
     return;
   }
   const busyLabel = S.busy === 'deploy' ? 'Confirm in your wallet' : S.busy === 'mining' ? 'Deploying, waiting for the block' : null;
@@ -193,7 +249,10 @@ function render() {
     <button class="btn btn-primary" id="deploy" type="button" ${!S.account || !onRight || S.busy ? 'disabled' : ''}>
       ${busyLabel ? `<span class="spinner"></span> ${busyLabel}` : 'Deploy contract'}
     </button>
-    ${!S.account ? '<p class="small">Connect your wallet in step 1 first.</p>' : !onRight ? `<p class="small">Switch to ${esc(net.name)} in step 1 first.</p>` : `<p class="small">Costs a small ${esc(net.gasToken)} network fee, paid by your connected wallet.</p>`}`;
+    ${!S.account ? '<p class="small">Connect your wallet in step 1 first.</p>' : !onRight ? `<p class="small">Switch to ${esc(net.name)} in step 1 first.</p>` : `<p class="small">Costs a small ${esc(net.gasToken)} network fee, paid by your connected wallet.</p>`}
+    <h3>Already deployed?</h3>
+    <p class="small">You don't need to deploy again. Paste the contract address to open it (find it in MetaMask activity, or on the explorer under your owner wallet as "Contract Creation").</p>
+    <div class="copy-line"><input id="existing" placeholder="0x... contract address" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;padding:10px 12px;border:1px solid var(--line);border-radius:6px;font:inherit" /><button class="btn btn-ghost btn-sm" id="open-existing" type="button">Open</button></div>`;
 }
 
 // ------------------------------------------------------------------ events
@@ -208,6 +267,17 @@ document.addEventListener('click', async (e) => {
     case 'gen-keeper': return generateKeeper();
     case 'deploy': return deploy();
     case 'fund': return fundKeeper();
+    case 'open-existing': return loadContract($('#existing').value.trim());
+    case 'set-keeper': return changeKeeper();
+    case 'toggle-pause': {
+      const next = !S.deployed.paused;
+      if (!confirm(next ? 'Pause all billing? No charges can go through until you unpause.' : 'Unpause billing?')) return;
+      return ownerTx('pause', (c) => c.setPaused(next));
+    }
+    case 'new-deploy':
+      if (!confirm('Clear this contract from the page and deploy a new one? The old contract keeps existing on the chain.')) return;
+      S.deployed = null; try { localStorage.removeItem(SAVED_KEY); } catch { /* ignore */ }
+      return render();
   }
 });
 document.addEventListener('change', (e) => {
@@ -224,12 +294,16 @@ document.addEventListener('change', (e) => {
     return;
   }
   const pill = $('#net-pill'); pill.textContent = `${S.cfg.network.token.symbol} on ${S.cfg.network.name}`; pill.hidden = false;
+  let known = null;
   try {
     const b = await (await fetch('/api/billing/config')).json();
     if (b.contract) {
-      $('.intro').insertAdjacentHTML('afterend', `<p class="msg warn">A billing contract is already set on the server (${esc(b.contract)}). Deploy again only if you want to replace it.</p>`);
+      known = b.contract;
+      $('.intro').insertAdjacentHTML('afterend', `<p class="msg ok">The server already uses billing contract ${esc(b.contract)}. It opens below once your wallet is connected. No need to deploy again.</p>`);
     }
   } catch { /* ignore */ }
+  if (!known) { try { known = JSON.parse(localStorage.getItem(SAVED_KEY) || 'null')?.address || null; } catch { /* ignore */ } }
+  S.pendingOpen = known;
   render();
   if (window.ethereum) {
     try {
