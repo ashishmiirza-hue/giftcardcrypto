@@ -101,10 +101,52 @@ export async function verifyClaim(txHash) {
  * from confirmed blocks. Remembers the last block in the DB, so after a restart
  * it catches up on anything it missed.
  */
+export const chainStatus = { ok: false, lastBlock: null, error: null };
+
+function rpcHint(e) {
+  const m = `${e.shortMessage || ''} ${e.message || ''}`;
+  if (/does not exist|not available|UNSUPPORTED_OPERATION|-32601/i.test(m))
+    return `RPC_URL ${config.network.name} ka normal RPC nahi lagta (shayad multichain/advanced API URL hai). ` +
+           `Sahi format: ${config.network.key === 'base' ? 'https://rpc.ankr.com/base/KEY' : 'https://rpc.ankr.com/base_sepolia/KEY'} ` +
+           `ya RPC_URL khaali chhodo (free public RPC ${config.network.publicRpc} use hoga).`;
+  if (/401|403|unauthori|api key/i.test(m)) return 'RPC_URL ki key galat hai ya expire ho gayi.';
+  if (/429|rate/i.test(m)) return 'RPC ne rate-limit kiya. POLL_INTERVAL_MS badhao ya doosra RPC lo.';
+  return 'RPC_URL check karo.';
+}
+
+/** Make sure the RPC works and is on the right chain. Retries until it does. */
+async function waitForRpc() {
+  for (;;) {
+    try {
+      const [head, chainIdHex] = await Promise.all([
+        provider.getBlockNumber(),
+        provider.send('eth_chainId', []),
+      ]);
+      if (Number(chainIdHex) !== config.network.chainId) {
+        throw Object.assign(new Error(`RPC chain ${Number(chainIdHex)} hai, lekin NETWORK=${config.network.key} ko ${config.network.chainId} chahiye`), { wrongChain: true });
+      }
+      chainStatus.ok = true;
+      chainStatus.error = null;
+      return head;
+    } catch (e) {
+      const hint = e.wrongChain ? 'RPC_URL galat network ka hai.' : rpcHint(e);
+      chainStatus.ok = false;
+      chainStatus.error = hint;
+      console.error(`[chain] RPC se connect nahi ho paya: ${e.shortMessage || e.message}\n[chain] ${hint} 30 second baad dobara try karega.`);
+      await sleep(30000);
+    }
+  }
+}
+
+/**
+ * Backup path: every POLL_INTERVAL_MS, read USDC Transfer logs to our wallet
+ * from confirmed blocks. Remembers the last block in the DB, so after a restart
+ * it catches up on anything it missed.
+ */
 export async function startListener() {
+  const head = await waitForRpc();
   let last = Number(getMeta('last_block'));
   if (!last) {
-    const head = await provider.getBlockNumber();
     last = (config.startBlock ?? head) - 1;
     setMeta('last_block', last);
   }
@@ -143,7 +185,12 @@ export async function startListener() {
         last = to;
         setMeta('last_block', last);
       }
+      chainStatus.ok = true;
+      chainStatus.error = null;
+      chainStatus.lastBlock = last;
     } catch (e) {
+      chainStatus.ok = false;
+      chainStatus.error = rpcHint(e);
       console.error(`[chain] listener error: ${e.shortMessage || e.message}`);
     }
     await sleep(config.pollIntervalMs);

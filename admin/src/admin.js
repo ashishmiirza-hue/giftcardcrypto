@@ -50,7 +50,10 @@ async function load() {
 }
 
 function render() {
-  const { products, orders, unmatched, totals, rate, network, wallet } = data;
+  const { products, orders, unmatched, totals, rate, network, wallet, chain } = data;
+  const warn = $('#chain-warn');
+  warn.hidden = !!chain?.ok;
+  warn.textContent = chain?.ok ? '' : `Blockchain se connection nahi hai, payments confirm nahi hongi. ${chain?.error || ''}`;
   const stock = products.reduce((n, p) => n + p.in_stock, 0);
   const waiting = orders.filter((o) => o.status === 'needs_code').length;
 

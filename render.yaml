@@ -1,22 +1,21 @@
 # Render blueprint: EK service mein sab kuch (store + admin + backend)
 #   store  -> https://<service>.onrender.com/
 #   admin  -> https://<service>.onrender.com/admin/
-#   API    -> https://<service>.onrender.com/api/...
+#   API    -> https://<service>.onrender.com/api/health
 # Render dashboard -> New -> Blueprint -> is repo ko chuno.
-# Secret values (RPC_URL, RECEIVING_WALLET, REOWN_PROJECT_ID, ADMIN_KEY) Render tumse poochega.
 services:
   - type: web
-    name: tohfa-backend
+    name: giftcardcrypto
     runtime: node
-    buildCommand: cd store && npm install && npm run build && cd ../admin && npm install && npm run build && cd ../backend && npm install
+    plan: free
+    buildCommand: cd store && npm install && npm run build && cd ../admin && npm install && npm run build && cd ../backend && rm -rf node_modules && npm install
     startCommand: cd backend && npm start
     healthCheckPath: /api/health
-    plan: free
     envVars:
       - key: NODE_VERSION
-        value: "20"
+        value: "22"
       - key: NETWORK
-        value: base-sepolia
+        value: base
       - key: TRUST_PROXY
         value: "1"
       - key: CONFIRMATIONS
@@ -25,11 +24,13 @@ services:
         value: "10000"
       - key: ORDER_TTL_MIN
         value: "30"
+      - key: USDC_INR_FALLBACK
+        value: "100"
       - key: STORE_NAME
         value: Tohfa
+      # Khaali chhodo to free public RPC (https://mainnet.base.org) use hoga.
+      # Ankr: https://rpc.ankr.com/base/YOUR_KEY
       - key: RPC_URL
-        sync: false
-      - key: RPC_URL_2
         sync: false
       - key: RECEIVING_WALLET
         sync: false
@@ -37,8 +38,8 @@ services:
         sync: false
       - key: ADMIN_KEY
         sync: false
-    # Live jaane par: plan "starter" karo aur ye disk lagao, taaki orders/codes
-    # restart ya redeploy par delete na hon. Saath mein DB_PATH=/var/data/store.db set karo.
+    # Asli customers ke liye: plan "starter" karo aur ye disk lagao, taaki
+    # orders/codes restart par delete na hon. Saath mein DB_PATH=/var/data/store.db
     # disk:
     #   name: data
     #   mountPath: /var/data

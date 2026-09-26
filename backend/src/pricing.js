@@ -4,23 +4,39 @@ let rate = config.usdcInrFallback;
 let source = 'fallback';
 let updatedAt = 0;
 
+// Two free sources; if both fail (rate limits on shared hosts are common),
+// the last good rate or USDC_INR_FALLBACK is used.
+const SOURCES = [
+  {
+    name: 'coinbase',
+    url: 'https://api.coinbase.com/v2/exchange-rates?currency=USDC',
+    read: (d) => Number(d?.data?.rates?.INR),
+  },
+  {
+    name: 'coingecko',
+    url: 'https://api.coingecko.com/api/v3/simple/price?ids=usd-coin&vs_currencies=inr',
+    read: (d) => Number(d?.['usd-coin']?.inr),
+  },
+];
+
 async function refresh() {
-  try {
-    const res = await fetch(
-      'https://api.coingecko.com/api/v3/simple/price?ids=usd-coin&vs_currencies=inr',
-      { signal: AbortSignal.timeout(8000) }
-    );
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    const r = Number(data?.['usd-coin']?.inr);
-    // Sanity range so one bad API response can't reprice the whole store
-    if (!(r > 50 && r < 200)) throw new Error(`rate out of range: ${r}`);
-    rate = r;
-    source = 'coingecko';
-    updatedAt = Date.now();
-  } catch (e) {
-    console.warn(`[pricing] rate refresh failed (${e.message}); using ${rate} (${source})`);
+  const errors = [];
+  for (const src of SOURCES) {
+    try {
+      const res = await fetch(src.url, { signal: AbortSignal.timeout(8000), headers: { accept: 'application/json' } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const r = src.read(await res.json());
+      // Sanity range so one bad API response can't reprice the whole store
+      if (!(r > 50 && r < 200)) throw new Error(`rate out of range: ${r}`);
+      rate = r;
+      source = src.name;
+      updatedAt = Date.now();
+      return;
+    } catch (e) {
+      errors.push(`${src.name}: ${e.message}`);
+    }
   }
+  console.warn(`[pricing] rate refresh failed (${errors.join('; ')}); using ₹${rate} (${source})`);
 }
 
 export function startPricing() {

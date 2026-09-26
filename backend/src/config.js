@@ -8,6 +8,7 @@ const NETWORKS = {
     chainId: 8453,
     usdc: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
     explorer: 'https://basescan.org',
+    publicRpc: 'https://mainnet.base.org',
   },
   'base-sepolia': {
     key: 'base-sepolia',
@@ -15,19 +16,20 @@ const NETWORKS = {
     chainId: 84532,
     usdc: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
     explorer: 'https://sepolia.basescan.org',
+    publicRpc: 'https://sepolia.base.org',
   },
 };
 
 function required(name) {
   const v = process.env[name];
   if (!v || !v.trim()) {
-    console.error(`\n[config] Missing ${name} in .env (see .env.example)\n`);
+    console.error(`\n[config] ${name} set nahi hai. Render par: Environment tab mein add karo. Local par: backend/.env mein.\n`);
     process.exit(1);
   }
   return v.trim();
 }
 
-const networkKey = (process.env.NETWORK || 'base-sepolia').trim();
+const networkKey = (process.env.NETWORK || 'base').trim();
 const network = NETWORKS[networkKey];
 if (!network) {
   console.error(`[config] NETWORK must be one of: ${Object.keys(NETWORKS).join(', ')}`);
@@ -36,13 +38,13 @@ if (!network) {
 
 const wallet = required('RECEIVING_WALLET');
 if (!ethers.isAddress(wallet)) {
-  console.error('[config] RECEIVING_WALLET is not a valid address');
+  console.error('[config] RECEIVING_WALLET sahi wallet address nahi hai. 0x se shuru hone wala 42 characters ka address daalo (private key nahi).');
   process.exit(1);
 }
 
 const adminKey = required('ADMIN_KEY');
 if (adminKey.length < 16 || adminKey.startsWith('change-this')) {
-  console.error('[config] ADMIN_KEY must be a long random string (16+ chars)');
+  console.error('[config] ADMIN_KEY kam se kam 16 characters ka hona chahiye, aur "change-this" se shuru nahi.');
   process.exit(1);
 }
 
@@ -50,7 +52,8 @@ export const config = {
   storeName: process.env.STORE_NAME || 'Tohfa',
   port: Number(process.env.PORT || 3001),
   network,
-  rpcUrl: required('RPC_URL'),
+  // RPC_URL optional: if empty, the network's free public RPC is used.
+  rpcUrl: (process.env.RPC_URL || '').trim() || network.publicRpc,
   rpcUrl2: (process.env.RPC_URL_2 || '').trim() || null,
   wallet: ethers.getAddress(wallet),
   reownProjectId: required('REOWN_PROJECT_ID'),

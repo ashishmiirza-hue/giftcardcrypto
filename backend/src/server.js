@@ -9,7 +9,7 @@ import { startPricing, getRate, priceUnits, formatUnits } from './pricing.js';
 import {
   createOrder, getOrderForCustomer, publicOrder, fulfillWaiting, OrderError,
 } from './orders.js';
-import { verifyClaim, startListener } from './chain.js';
+import { verifyClaim, startListener, chainStatus } from './chain.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -32,7 +32,13 @@ app.use((req, res, next) => {
   next();
 });
 
-app.get('/api/health', (req, res) => res.json({ ok: true, network: config.network.key }));
+app.get('/api/health', (req, res) => res.json({
+  ok: true,
+  network: config.network.key,
+  blockchain: chainStatus.ok ? 'connected' : 'not connected',
+  lastBlock: chainStatus.lastBlock,
+  problem: chainStatus.error,
+}));
 
 // ---------- tiny per-IP rate limiter ----------
 const hits = new Map();
@@ -142,7 +148,7 @@ app.get('/api/admin/overview', (req, res) => {
                              FROM orders WHERE status IN ('paid','needs_code')`).get();
   res.json({
     rate: { rate, source, updatedAt },
-    network: config.network, wallet: config.wallet,
+    network: config.network, wallet: config.wallet, chain: chainStatus,
     totals: { orders: totals.n, usdc: formatUnits(totals.units) },
     products, orders, unmatched,
   });
@@ -222,7 +228,5 @@ app.listen(config.port, () => {
   console.log(`[server] ${config.storeName} on http://localhost:${config.port}  (${config.network.name})`);
   console.log(`[server] payments go to ${config.wallet}`);
 });
-startListener().catch((e) => {
-  console.error('[chain] listener could not start:', e.message);
-  process.exit(1);
-});
+// The site stays up even if the RPC is down; the listener keeps retrying.
+startListener().catch((e) => console.error('[chain] listener stopped:', e.message));
