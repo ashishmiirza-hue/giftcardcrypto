@@ -39,6 +39,16 @@
     </section>
 
     <section>
+      <h2>Payment networks</h2>
+      <p class="small" style="margin-bottom:12px">Switch a network or coin on to show it at checkout, off to hide it. Customers who already have an open order on a switched-off network can still finish paying; the server keeps watching it until those orders close. AI billing always runs on the main network.</p>
+      <div class="net-grid" id="networks"></div>
+      <div class="row" style="margin-top:14px;align-items:center">
+        <button class="btn btn-primary" id="save-networks" type="button" disabled>Save changes</button>
+        <span class="small" id="net-dirty"></span>
+      </div>
+    </section>
+
+    <section>
       <h2>Cards and stock</h2>
       <div class="table-wrap"><table id="products"></table></div>
       <p class="small" style="margin-top:8px">Edit discount or face value, then press Save on that row. Turning a card off hides it from the store.</p>

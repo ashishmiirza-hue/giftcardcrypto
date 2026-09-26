@@ -124,6 +124,35 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 `);
 
+// ---------- migrations (safe to run on every start) ----------
+function addColumn(table, col, type) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+  if (!cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
+}
+// Multi-network payments: which network/token an order is paid with.
+addColumn('orders', 'network', 'TEXT');
+addColumn('orders', 'token_symbol', 'TEXT');
+addColumn('orders', 'token_address', 'TEXT');
+addColumn('orders', 'decimals', 'INTEGER');
+addColumn('unmatched_payments', 'network', 'TEXT');
+addColumn('unmatched_payments', 'token_symbol', 'TEXT');
+addColumn('unmatched_payments', 'decimals', 'INTEGER');
+db.exec('CREATE INDEX IF NOT EXISTS idx_orders_pay ON orders(network, token_address, amount_units, status)');
+// Older single-network rows: attach them to the main network.
+{
+  const main = config.network;
+  db.prepare(`UPDATE orders SET network = ?, token_symbol = ?, token_address = ?, decimals = ? WHERE network IS NULL`)
+    .run(main.key, main.token.symbol, main.token.address, main.token.decimals);
+  db.prepare(`UPDATE unmatched_payments SET network = ?, token_symbol = ?, decimals = ? WHERE network IS NULL`)
+    .run(main.key, main.token.symbol, main.token.decimals);
+  // listener position used to be one global key
+  const old = db.prepare(`SELECT value FROM meta WHERE key = 'last_block'`).get();
+  if (old) {
+    db.prepare(`INSERT OR IGNORE INTO meta(key, value) VALUES(?, ?)`).run(`last_block:${main.key}`, old.value);
+    db.prepare(`DELETE FROM meta WHERE key = 'last_block'`).run();
+  }
+}
+
 export function getMeta(key) {
   return db.prepare('SELECT value FROM meta WHERE key = ?').get(key)?.value ?? null;
 }

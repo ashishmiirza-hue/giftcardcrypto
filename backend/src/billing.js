@@ -9,7 +9,7 @@
  */
 import crypto from 'node:crypto';
 import { ethers } from 'ethers';
-import { config } from './config.js';
+import { config, publicNetwork } from './config.js';
 import { db, getMeta, setMeta } from './db.js';
 import { provider } from './chain.js';
 import { formatUnits } from './pricing.js';
@@ -165,6 +165,35 @@ function login({ wallet, time, signature }) {
   const tokenStr = crypto.randomBytes(24).toString('base64url');
   sessions.set(tokenStr, { wallet: lc(wallet), exp: now() + 24 * 3600e3 });
   return tokenStr;
+}
+
+function newSession(wallet) {
+  const tokenStr = crypto.randomBytes(24).toString('base64url');
+  sessions.set(tokenStr, { wallet: lc(wallet), exp: now() + 24 * 3600e3 });
+  return tokenStr;
+}
+
+/**
+ * Sign-in without an extra wallet popup: the customer just sent the
+ * enroll/setLimits transaction from their wallet. If that transaction really
+ * came from this wallet, went to our billing contract, succeeded and is recent,
+ * it proves ownership as well as a signed message would.
+ */
+async function sessionFromTx(walletIn, txHash) {
+  need(enabled, 400, 'AI billing is not set up yet.');
+  need(ethers.isAddress(walletIn), 400, 'Wallet address is not valid.');
+  need(/^0x[0-9a-fA-F]{64}$/.test(String(txHash || '')), 400, 'Transaction ID is not valid.');
+  const used = `billing_proof:${lc(txHash)}`;
+  need(!getMeta(used), 400, 'This transaction was already used to sign in. Use "Sign in" instead.');
+  const [tx, receipt] = await Promise.all([provider.getTransaction(txHash), provider.getTransactionReceipt(txHash)]);
+  need(tx && receipt, 404, 'Transaction not found yet. Try again in a few seconds.');
+  need(receipt.status === 1, 400, 'That transaction failed.');
+  need(lc(tx.from) === lc(walletIn), 403, 'That transaction was not sent by this wallet.');
+  need(lc(tx.to) === lc(config.billing.contract), 400, 'That transaction was not sent to the billing contract.');
+  const block = await provider.getBlock(receipt.blockNumber);
+  need(block && now() - Number(block.timestamp) * 1000 < 60 * 60e3, 400, 'That transaction is too old. Use "Sign in" instead.');
+  setMeta(used, now());
+  return newSession(walletIn);
 }
 
 function sessionWallet(req) {
@@ -341,7 +370,7 @@ export function mountBilling(app, { wrap, rateLimit }) {
     res.json({
       enabled,
       contract: config.billing.contract,
-      network: config.network,
+      network: { ...publicNetwork(config.network), token: config.network.token },
       pricePer1k: s.pricePer1k,
       defaults: { approve: s.defaultApprove, maxPerCharge: s.defaultMaxPerCharge, maxPerPeriod: s.defaultMaxPerPeriod },
     });
@@ -353,6 +382,15 @@ export function mountBilling(app, { wrap, rateLimit }) {
     const time = new Date().toISOString();
     res.json({ time, message: loginMessage(wallet, time) });
   });
+
+  // After Activate / Save limits: sign in using that transaction (no signature popup).
+  app.post('/api/billing/login-tx', rateLimit(30, 10 * 60e3), wrap(async (req, res) => {
+    const wallet = String(req.body?.wallet || '');
+    const session = await sessionFromTx(wallet, req.body?.txHash);
+    const chain = await onChain(wallet).catch(() => null);
+    if (chain?.active || chain?.allowance > 0n) addAccount(wallet, 'activated');
+    res.json({ session });
+  }));
 
   app.post('/api/billing/login', rateLimit(30, 10 * 60e3), wrap((req, res) => {
     res.json({ session: login(req.body || {}) });

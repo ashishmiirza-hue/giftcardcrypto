@@ -289,3 +289,26 @@ td .amt-in { width: 90px; }
 .deploy table { margin-top: 4px; }
 
 .pill.warn { background: #FFF6E5; color: var(--warn); }
+
+/* ---------- payment network switches ---------- */
+.net-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.net-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.net-card.is-off { background: var(--paper); }
+.net-card.is-off .net-name { color: var(--muted); }
+.net-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.net-name { font: 700 1.05rem var(--display); }
+.net-meta { font-size: .85rem; color: var(--muted); display: flex; flex-direction: column; gap: 3px; overflow-wrap: anywhere; }
+.coins { display: flex; flex-wrap: wrap; gap: 8px; }
+.coin { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; font-size: .9rem; cursor: pointer; background: #fff; }
+.coin input { width: auto; margin: 0; }
+.coin.on { border-color: var(--ok); background: #E7F4EE; color: var(--ok); font-weight: 600; }
+.switch { position: relative; width: 44px; height: 24px; flex: none; }
+.switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; z-index: 1; }
+.switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--line); transition: background .15s; }
+.switch span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .15s; }
+.switch input:checked + span { background: var(--ok); }
+.switch input:checked + span::after { transform: translateX(20px); }
+.switch input:focus-visible + span { outline: 3px solid var(--usdc); outline-offset: 2px; }
+.switch input:disabled { cursor: not-allowed; }
+.switch input:disabled + span { opacity: .5; }
+.pill.muted { background: var(--paper); color: var(--muted); }

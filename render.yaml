@@ -16,6 +16,12 @@ services:
         value: "22"
       - key: NETWORK
         value: bsc
+      - key: ENABLED_NETWORKS
+        value: bsc,tron,arbitrum,polygon,base,ethereum
+      - key: TRON_RECEIVING_WALLET
+        sync: false
+      - key: TRONGRID_API_KEY
+        sync: false
       - key: TRUST_PROXY
         value: "1"
       - key: POLL_INTERVAL_MS

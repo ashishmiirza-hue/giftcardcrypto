@@ -1,7 +1,8 @@
 import {
   getAccount, watchAccount, readContract, writeContract, signMessage, waitForTransactionReceipt,
+  getCapabilities, sendCalls, waitForCallsStatus,
 } from '@wagmi/core';
-import { erc20Abi, parseUnits, formatUnits } from 'viem';
+import { erc20Abi, parseUnits, formatUnits, encodeFunctionData } from 'viem';
 import { initWallet, friendlyWalletError, connectWallet, switchToStoreChain, switchHelpText, walletChooserHTML, isMobile } from './wallet.js';
 
 const BILLING_ABI = [
@@ -87,7 +88,7 @@ async function send(kind, request) {
     toast('Sent. Waiting for confirmation…');
     await waitForTransactionReceipt(S.wagmi, { hash, chainId: S.cfg.network.chainId, timeout: 120000 });
     await readChain();
-    return true;
+    return hash;
   } catch (e) {
     S.error = e.message?.startsWith('Switch your wallet') ? e.message : friendlyWalletError(e, S.cfg);
     S.chainId = getAccount(S.wagmi).chainId ?? S.chainId;
@@ -110,17 +111,89 @@ function readForm() {
   return null;
 }
 
-const approve = () => send('approve', {
-  address: S.cfg.network.token.address, abi: erc20Abi, functionName: 'approve',
-  args: [S.bcfg.contract, toUnits(S.form.approve)],
-});
+const isRejection = (e) => /reject|denied|cancel/i.test(`${e?.shortMessage || ''} ${e?.message || ''}`) || e?.code === 4001;
 
-async function activate() {
-  const ok = await send(S.account?.active ? 'limits' : 'enroll', {
-    address: S.bcfg.contract, abi: BILLING_ABI, functionName: S.account?.active ? 'setLimits' : 'enroll',
-    args: [toUnits(S.form.maxPerCharge), toUnits(S.form.maxPerPeriod)],
-  });
-  if (ok) { S.editLimits = false; toast(S.account?.active ? 'Billing is active.' : 'Saved.'); if (!S.session) signIn(); else loadMe(); }
+/** Can this wallet run several calls in one confirmation (EIP-5792)? */
+async function walletCanBatch() {
+  try {
+    const caps = await getCapabilities(S.wagmi, { chainId: S.cfg.network.chainId });
+    const c = caps?.[S.cfg.network.chainId] || caps || {};
+    const atomic = c.atomic?.status || c.atomicBatch?.supported;
+    return atomic === 'supported' || atomic === 'ready' || atomic === true;
+  } catch { return false; }
+}
+
+/**
+ * One button for the whole setup. Approve (if needed) + activate:
+ *  - wallets that support batching: ONE confirmation for both;
+ *  - other wallets: both requests are sent back to back, so the second
+ *    confirmation opens by itself right after the first (no second click).
+ * enroll() doesn't depend on the approval, so the order is safe either way.
+ */
+async function setupBilling() {
+  const needApprove = S.allowance === null || S.allowance < toUnits(S.form.approve);
+  const kind = S.account?.active ? 'limits' : 'enroll';
+  const approveCall = { to: S.cfg.network.token.address, data: encodeFunctionData({ abi: erc20Abi, functionName: 'approve', args: [S.bcfg.contract, toUnits(S.form.approve)] }) };
+  const enrollCall = { to: S.bcfg.contract, data: encodeFunctionData({ abi: BILLING_ABI, functionName: S.account?.active ? 'setLimits' : 'enroll', args: [toUnits(S.form.maxPerCharge), toUnits(S.form.maxPerPeriod)] }) };
+  const chainId = S.cfg.network.chainId;
+
+  S.busy = kind; S.error = null; render();
+  let enrollHash = null;
+  try {
+    await ensureChain();
+    if (!needApprove) {
+      enrollHash = await writeContract(S.wagmi, { address: S.bcfg.contract, abi: BILLING_ABI, functionName: S.account?.active ? 'setLimits' : 'enroll', args: [toUnits(S.form.maxPerCharge), toUnits(S.form.maxPerPeriod)], chainId });
+      await waitForTransactionReceipt(S.wagmi, { hash: enrollHash, chainId, timeout: 120000 });
+    } else {
+      let batched = false;
+      if (await walletCanBatch()) {
+        try {
+          const { id } = await sendCalls(S.wagmi, { calls: [approveCall, enrollCall], chainId, forceAtomic: true });
+          S.busy = 'mining'; render();
+          const res = await waitForCallsStatus(S.wagmi, { id, timeout: 120000 });
+          if (res.status !== 'success') throw new Error('The wallet reported that the setup did not go through.');
+          enrollHash = res.receipts?.[res.receipts.length - 1]?.transactionHash || null;
+          batched = true;
+        } catch (e) {
+          if (isRejection(e)) throw e;
+          // wallet claimed support but couldn't do it: fall back below
+        }
+      }
+      if (!batched) {
+        S.busy = 'two'; render();
+        const approveHash = await writeContract(S.wagmi, { address: S.cfg.network.token.address, abi: erc20Abi, functionName: 'approve', args: [S.bcfg.contract, toUnits(S.form.approve)], chainId });
+        // second confirmation opens straight away, no extra click
+        enrollHash = await writeContract(S.wagmi, { address: S.bcfg.contract, abi: BILLING_ABI, functionName: S.account?.active ? 'setLimits' : 'enroll', args: [toUnits(S.form.maxPerCharge), toUnits(S.form.maxPerPeriod)], chainId });
+        S.busy = 'mining'; render();
+        await Promise.all([approveHash, enrollHash].map((hash) => waitForTransactionReceipt(S.wagmi, { hash, chainId, timeout: 120000 })));
+      }
+    }
+    await readChain();
+  } catch (e) {
+    S.error = e.message?.startsWith('Switch your wallet') ? e.message : friendlyWalletError(e, S.cfg);
+    S.chainId = getAccount(S.wagmi).chainId ?? S.chainId;
+    await readChain();
+    S.busy = null; render();
+    return;
+  }
+  S.busy = null;
+  await afterActivate(enrollHash);
+}
+
+async function afterActivate(hash) {
+  if (!S.account?.active) { render(); return; }
+  S.editLimits = false;
+  toast('Billing is active.');
+  if (!S.session && hash) {
+    // Sign in with the transaction just sent: no extra "sign message" popup.
+    try {
+      const { session } = await api('/api/billing/login-tx', { method: 'POST', body: { wallet: S.address, txHash: hash } });
+      S.session = session;
+      try { sessionStorage.setItem(sessionKey(), session); } catch { /* ignore */ }
+    } catch { /* the "Sign in" button stays available */ }
+  }
+  await loadMe();
+  render();
 }
 
 async function cancelBilling() {
@@ -195,10 +268,9 @@ function render() {
   const labels = [
     ['Connect wallet', st.connected],
     ['Choose limits', st.active && !S.editLimits],
-    [`Approve ${SYM()}`, st.approved],
-    ['Activate', st.active && !S.editLimits],
+    ['Approve and activate', st.active && !S.editLimits],
   ];
-  const current = !st.connected ? 0 : (!st.active || S.editLimits) ? (st.approved ? 3 : 1) : 4;
+  const current = !st.connected ? 0 : (!st.active || S.editLimits) ? 1 : 3;
   steps.innerHTML = labels.map(([l, done], i) =>
     `<li class="${done ? 'done' : i === current || (current === 1 && i === 2) ? 'now' : ''}">${esc(l)}</li>`).join('');
 
@@ -238,13 +310,17 @@ function render() {
         <span class="hint">This is permission, not a payment. Charges still stop at your limits above. Currently approved: ${esc(allowanceTxt)}.</span>
       </div>
       ${err}
-      ${!st.approved || (S.form.approve && S.allowance < toUnits(S.form.approve))
-        ? `<button class="btn btn-primary btn-block" id="approve" type="button" ${S.busy ? 'disabled' : ''}>${busy('approve', 'Confirm in your wallet') || `Step 1 of 2: Approve ${esc(S.form.approve || '')} ${esc(SYM())}`}</button>` : ''}
-      <button class="btn ${st.approved ? 'btn-primary' : 'btn-ghost'} btn-block" id="activate" type="button" ${S.busy || !st.approved ? 'disabled' : ''}>
-        ${busy('enroll', 'Confirm in your wallet') || busy('limits', 'Confirm in your wallet') || (st.active ? 'Save new limits' : 'Step 2 of 2: Activate billing')}
-      </button>
+      ${(() => {
+        const needApprove = S.allowance === null || (S.form.approve && S.allowance < toUnits(S.form.approve));
+        const label = st.active ? (needApprove ? 'Save limits and approval' : 'Save new limits')
+          : needApprove ? `Approve ${esc(S.form.approve || '')} ${esc(SYM())} and activate` : 'Activate billing';
+        const busyText = S.busy === 'two' ? 'Confirm in your wallet (2 quick confirmations)'
+          : S.busy === 'mining' ? 'Activating, waiting for the network…'
+          : S.busy ? 'Confirm in your wallet' : null;
+        return `<button class="btn btn-primary btn-block" id="setup-go" type="button" ${S.busy ? 'disabled' : ''}>${busyText ? `<span class="spinner" aria-hidden="true"></span> ${busyText}` : label}</button>`;
+      })()}
       ${S.editLimits ? '<button class="link-btn" id="stop-edit" type="button">Keep current limits</button>' : ''}
-      <p class="small">Each step asks for a small ${esc(S.cfg.network.gasToken)} network fee in your wallet.</p>`;
+      <p class="small">Needs a small ${esc(S.cfg.network.gasToken)} network fee. Most wallets ask you to confirm once; some ask twice in a row.</p>`;
   }
 
   renderDashboard();
@@ -309,8 +385,7 @@ document.addEventListener('click', async (e) => {
       if (S.chainId === S.cfg.network.chainId) await readChain();
       return render();
     }
-    case 'approve': { const err = readForm(); if (err) { S.error = err; return render(); } return approve(); }
-    case 'activate': { const err = readForm(); if (err) { S.error = err; return render(); } return activate(); }
+    case 'setup-go': { const err = readForm(); if (err) { S.error = err; return render(); } return setupBilling(); }
     case 'signin': return signIn();
     case 'refresh': await readChain(); return loadMe();
     case 'new-key': return newApiKey();
@@ -331,8 +406,8 @@ document.addEventListener('input', (e) => {
   if (e.target.id === 'f-charge') S.form.maxPerCharge = e.target.value;
   if (e.target.id === 'f-period') S.form.maxPerPeriod = e.target.value;
   if (e.target.id === 'f-approve') {
-    const btn = $('#approve');
-    if (btn && !S.busy) btn.textContent = `Step 1 of 2: Approve ${e.target.value} ${SYM()}`;
+    const btn = $('#setup-go');
+    if (btn && !S.busy && /Approve/.test(btn.textContent)) btn.textContent = `Approve ${e.target.value} ${SYM()} and activate`;
   }
 });
 

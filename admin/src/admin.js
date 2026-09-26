@@ -124,22 +124,92 @@ function updateCost() {
   $('#u-cost').textContent = t > 0 ? `Cost: ${(t / 1000 * bill.settings.pricePer1k).toFixed(6)} ${data.network.token.symbol}` : '';
 }
 
+// ---------- payment network switches ----------
+let netDraft = null;   // Set of option ids being edited (null = nothing changed)
+const FEE = { low: 'Low fee', medium: 'Small fee', high: 'High fee' };
+
+function savedEnabled(networks) {
+  return new Set(networks.flatMap((n) => n.tokens.filter((t) => t.enabled).map((t) => t.id)));
+}
+
+function renderNetworks(networks, addrLink) {
+  const saved = savedEnabled(networks);
+  const on = netDraft || saved;
+  const statusPill = (n) => {
+    if (!n.ready) return '<span class="pill muted">Setup needed</span>';
+    const st = n.status || {};
+    if (!st.watching) return n.openOrders ? '<span class="pill warn">Finishing open orders</span>' : '<span class="pill muted">Off</span>';
+    if (st.ok) return '<span class="pill on">Connected</span>';
+    if (st.ok === false) return '<span class="pill off">Not connected</span>';
+    return '<span class="pill muted">Starting…</span>';
+  };
+  $('#networks').innerHTML = networks.map((n) => {
+    const netOn = n.tokens.some((t) => on.has(t.id));
+    return `
+    <div class="net-card ${netOn ? '' : 'is-off'}" data-net="${esc(n.key)}">
+      <div class="net-head">
+        <span class="net-name">${esc(n.name)}${n.main ? ' <span class="pill on" style="font:600 .7rem var(--body)">Main</span>' : ''}</span>
+        <label class="switch" title="${netOn ? 'Switch off' : 'Switch on'}">
+          <input type="checkbox" data-net-toggle="${esc(n.key)}" ${netOn ? 'checked' : ''} ${n.ready ? '' : 'disabled'} aria-label="${esc(n.name)} on or off" />
+          <span></span>
+        </label>
+      </div>
+      <div class="coins">${n.tokens.map((t) => `
+        <label class="coin ${on.has(t.id) ? 'on' : ''}">
+          <input type="checkbox" data-coin="${esc(t.id)}" ${on.has(t.id) ? 'checked' : ''} ${n.ready ? '' : 'disabled'} /> ${esc(t.symbol)}
+        </label>`).join('')}
+      </div>
+      <div class="net-meta">
+        <span>${statusPill(n)} ${esc(FEE[n.fee] || '')}${n.openOrders ? `, ${n.openOrders} open order${n.openOrders > 1 ? 's' : ''}` : ''}</span>
+        ${n.ready ? `<span>Receives at ${addrLink(n.key, n.recipient)}</span>` : `<span class="msg warn" style="padding:8px 10px">Add <code>${esc(n.missing)}</code> in Render → Environment to use this network.</span>`}
+        ${n.status?.watching && n.status?.ok === false ? `<span style="color:var(--bad)">${esc(n.status.error || '')}</span>` : ''}
+        ${n.ready ? `<span>RPC: ${n.rpcSource === 'custom' ? 'your own' : `free public (set <code>${esc(n.rpcEnvKey)}</code> for reliability)`}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+  const changed = netDraft && (netDraft.size !== saved.size || [...netDraft].some((id) => !saved.has(id)));
+  $('#save-networks').disabled = !changed;
+  $('#net-dirty').textContent = changed ? 'Unsaved changes' : '';
+}
+
+document.addEventListener('change', (e) => {
+  const t = e.target;
+  if (!t.dataset || !data) return;
+  if (t.dataset.coin || t.dataset.netToggle) {
+    netDraft = netDraft || savedEnabled(data.networks);
+    if (t.dataset.coin) {
+      if (t.checked) netDraft.add(t.dataset.coin); else netDraft.delete(t.dataset.coin);
+    } else {
+      const n = data.networks.find((x) => x.key === t.dataset.netToggle);
+      for (const tok of n.tokens) { if (t.checked) netDraft.add(tok.id); else netDraft.delete(tok.id); }
+    }
+    renderNetworks(data.networks, (k, a) => {
+      const n = data.networks.find((x) => x.key === k);
+      return a ? `<a href="${n?.addressUrl || ''}${esc(a)}" target="_blank" rel="noopener">${short(a)}</a>` : '';
+    });
+  }
+});
+
 function render() {
-  const { products, orders, unmatched, totals, rate, network, wallet, chain } = data;
-  const sym = network.token.symbol;
+  const { products, orders, unmatched, totals, rate, network, wallet, chain, networks = [], rates = {} } = data;
+  const sym = network.token?.symbol || 'USDT';
+  const nets = Object.fromEntries(networks.map((n) => [n.key, n]));
+  const down = networks.filter((n) => n.status?.watching && n.status?.ok === false);
   const warn = $('#chain-warn');
-  warn.hidden = !!chain?.ok;
-  warn.textContent = chain?.ok ? '' : `Blockchain se connection nahi hai, payments confirm nahi hongi. ${chain?.error || ''}`;
+  warn.hidden = !down.length;
+  warn.innerHTML = down.map((n) => `${esc(n.name)}: connection nahi hai, is network ki payments confirm nahi hongi. ${esc(n.status?.error || '')}`).join('<br/>');
+  const txLink = (netKey, h) => { const n = nets[netKey] || network; return h ? `<a href="${n.txUrl || `${n.explorer}/tx/`}${esc(h)}" target="_blank" rel="noopener">${short(h)}</a>` : ''; };
+  const addrLink = (netKey, a) => { const n = nets[netKey] || network; return a ? `<a href="${n.addressUrl || `${n.explorer}/address/`}${esc(a)}" target="_blank" rel="noopener">${short(a)}</a>` : ''; };
   const stock = products.reduce((n, p) => n + p.in_stock, 0);
   const waiting = orders.filter((o) => o.status === 'needs_code').length;
 
   $('#stats').innerHTML = [
     ['Paid orders', totals.orders],
-    [`${sym} received`, totals.received],
+    ['Received (USD)', `${totals.received}${totals.receivedBreakdown?.length > 1 ? `<div class="small" style="font:400 .8rem var(--body)">${totals.receivedBreakdown.map(esc).join('<br/>')}</div>` : ''}`],
     ['Codes in stock', stock],
     ['Paid, waiting for a code', waiting],
-    [`${sym} rate`, `₹${Number(rate.rate).toFixed(2)} (${rate.source})`],
-    ['Receiving wallet', `<a href="${network.explorer}/address/${wallet}" target="_blank" rel="noopener">${short(wallet)}</a>`],
+    ['Rate', Object.entries(rates).length ? Object.entries(rates).map(([k, r]) => `${esc(k)} ₹${Number(r.rate).toFixed(2)}`).join('<br/>') : `₹${Number(rate.rate).toFixed(2)}`],
+    ['Receiving wallet', `${addrLink(network.key, wallet)}${data.tronWallet ? `<br/>${addrLink('tron', data.tronWallet)}` : ''}`],
   ].map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
 
   $('#products').innerHTML = `
@@ -162,27 +232,30 @@ function render() {
   $('#codes-product').innerHTML = products.map((p) => `<option value="${p.id}">${esc(p.brand)}, ${esc(p.name)} ${inr(p.face_value_inr)}</option>`).join('');
   if (sel) $('#codes-product').value = sel;
 
-  const tx = (h) => (h ? `<a href="${network.explorer}/tx/${esc(h)}" target="_blank" rel="noopener">${short(h)}</a>` : '');
+  renderNetworks(networks, addrLink);
+  const tx = (h, netKey) => txLink(netKey || network.key, h);
   $('#orders').innerHTML = orders.length ? `
-    <thead><tr><th>Created</th><th>Order</th><th>Card</th><th>Amount</th><th>Status</th><th>Payment</th><th>Payer</th><th>Email</th></tr></thead>
+    <thead><tr><th>Created</th><th>Order</th><th>Card</th><th>Amount</th><th>Paid with</th><th>Status</th><th>Payment</th><th>Payer</th><th>Email</th></tr></thead>
     <tbody>${orders.map((o) => `
       <tr>
         <td>${when(o.created_at)}</td>
         <td>${esc(o.id)}</td>
         <td>${esc(o.product_name)} ${inr(o.face_value_inr)}</td>
-        <td>${esc(o.amount)}</td>
+        <td>${esc(o.amount)} ${esc(o.token_symbol || sym)}</td>
+        <td>${esc(nets[o.network]?.short || o.network || '')}</td>
         <td class="status ${esc(o.status)}">${esc(o.status.replace('_', ' '))}</td>
-        <td>${tx(o.tx_hash) || (o.claimed_tx ? `claimed ${tx(o.claimed_tx)}` : '')}</td>
+        <td>${tx(o.tx_hash, o.network) || (o.claimed_tx ? `claimed ${tx(o.claimed_tx, o.network)}` : '')}</td>
         <td>${o.payer ? short(o.payer) : ''}</td>
         <td>${esc(o.email || '')}</td>
       </tr>`).join('')}</tbody>` : '<tbody><tr><td>No orders yet.</td></tr></tbody>';
 
   $('#unmatched').innerHTML = unmatched.length ? `
-    <thead><tr><th>Seen</th><th>Amount ${esc(sym)}</th><th>From</th><th>Transaction</th></tr></thead>
+    <thead><tr><th>Seen</th><th>Amount</th><th>Network</th><th>From</th><th>Transaction</th></tr></thead>
     <tbody>${unmatched.map((u) => `
-      <tr><td>${when(u.seen_at)}</td><td>${esc(u.amount)}</td>
-      <td><a href="${network.explorer}/address/${esc(u.payer)}" target="_blank" rel="noopener">${short(u.payer)}</a></td>
-      <td>${tx(u.tx_hash)}</td></tr>`).join('')}</tbody>` : '<tbody><tr><td>None. Every payment matched an order.</td></tr></tbody>';
+      <tr><td>${when(u.seen_at)}</td><td>${esc(u.amount)} ${esc(u.token_symbol || sym)}</td>
+      <td>${esc(nets[u.network]?.short || u.network || '')}</td>
+      <td>${addrLink(u.network, u.payer)}</td>
+      <td>${tx(u.tx_hash, u.network)}</td></tr>`).join('')}</tbody>` : '<tbody><tr><td>None. Every payment matched an order.</td></tr></tbody>';
 
   renderBilling();
 }
@@ -237,6 +310,16 @@ document.addEventListener('click', async (e) => {
       return toast(b.dataset.state === '1' ? 'Customer blocked: their API key stops working' : 'Customer unblocked');
     }
 
+    if (b.id === 'save-networks') {
+      if (!netDraft) return;
+      const turningOff = data.networks.filter((n) => n.tokens.some((t) => t.enabled) && !n.tokens.some((t) => netDraft.has(t.id))).map((n) => n.name);
+      if (turningOff.length && !confirm(`Switch off ${turningOff.join(', ')}? Customers won't see ${turningOff.length > 1 ? 'them' : 'it'} at checkout. Open orders can still be paid.`)) return;
+      await api('/api/admin/payments', { method: 'POST', body: { enabled: [...netDraft] } });
+      netDraft = null;
+      await load();
+      return toast('Payment networks saved');
+    }
+
     if (b.id === 'add-customer') {
       const wallet = $('#c-wallet').value.trim();
       const r = await api('/api/admin/billing/add-customer', { method: 'POST', body: { wallet } });
@@ -284,6 +367,6 @@ $('#key').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#login-
 if (key) load().catch(() => logout());
 // Auto-refresh every 30s, but not while you're editing a row in the cards table.
 setInterval(() => {
-  if (!key || document.hidden || $('#app').hidden || $('#products').contains(document.activeElement) || $('#billing').contains(document.activeElement)) return;
+  if (!key || document.hidden || $('#app').hidden || $('#products').contains(document.activeElement) || $('#billing').contains(document.activeElement) || netDraft) return;
   load().catch(() => {});
 }, 30000);

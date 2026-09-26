@@ -3,14 +3,15 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { config } from './config.js';
+import { config, publicNetwork } from './config.js';
 import { db } from './db.js';
-import { startPricing, getRate, priceUnits, formatUnits } from './pricing.js';
+import { startPricing, getRate, allRates, priceUnits, formatUnits } from './pricing.js';
 import {
-  createOrder, getOrderForCustomer, publicOrder, fulfillWaiting, OrderError,
+  createOrder, cancelOrder, getOrderForCustomer, publicOrder, fulfillWaiting, OrderError,
 } from './orders.js';
-import { verifyClaim, startListener, chainStatus } from './chain.js';
+import { verifyClaim, startListener, chainStatus, networkStatus } from './chain.js';
 import { mountBilling, BillingError } from './billing.js';
+import { activeOptions, isOptionEnabled, setEnabledOptions, openOrdersOn, PaymentsError } from './payments.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -39,6 +40,8 @@ app.get('/api/health', (req, res) => res.json({
   blockchain: chainStatus.ok ? 'connected' : 'not connected',
   lastBlock: chainStatus.lastBlock,
   problem: chainStatus.error,
+  networks: Object.fromEntries(Object.entries(networkStatus).map(([k, v]) => [k,
+    !v.watching && v.ok === null ? 'off' : v.ok ? 'connected' : `not connected${v.error ? `: ${v.error}` : ''}`])),
 }));
 
 // ---------- tiny per-IP rate limiter ----------
@@ -58,7 +61,7 @@ setInterval(() => hits.clear(), 60 * 60 * 1000);
 
 const wrap = (fn) => (req, res) =>
   Promise.resolve().then(() => fn(req, res)).catch((e) => {
-    if (e instanceof OrderError || e instanceof BillingError) return res.status(e.status).json({ error: e.message });
+    if (e instanceof OrderError || e instanceof BillingError || e instanceof PaymentsError) return res.status(e.status).json({ error: e.message });
     console.error(e);
     res.status(500).json({ error: 'Something went wrong on our side. Try again.' });
   });
@@ -68,8 +71,9 @@ app.get('/api/config', (req, res) => {
   res.json({
     storeName: config.storeName,
     projectId: config.reownProjectId,
-    network: { ...config.network, browserRpc: config.browserRpc },
+    network: { ...publicNetwork(config.network), token: config.network.token },
     recipient: config.wallet,
+    payOptions: activeOptions().map((o) => ({ id: o.id, network: publicNetwork(o.network), token: o.token })),
     orderTtlMin: config.orderTtlMin,
   });
 });
@@ -95,7 +99,8 @@ app.post('/api/orders', rateLimit(10, 10 * 60 * 1000), wrap((req, res) => {
   const email = String(req.body?.email || '').trim().slice(0, 200);
   if (!Number.isInteger(productId)) return res.status(400).json({ error: 'Pick a card first.' });
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: 'That email address looks incomplete.' });
-  const { id, token } = createOrder(productId, email);
+  const payWith = req.body?.payWith ? String(req.body.payWith) : undefined;
+  const { id, token } = createOrder(productId, email, payWith);
   const order = getOrderForCustomer(id, token);
   res.status(201).json({ token, order: publicOrder(order) });
 }));
@@ -106,7 +111,15 @@ app.get('/api/orders/:id', wrap((req, res) => {
   res.json({ order: publicOrder(order) });
 }));
 
-// Browser reports the txHash right after the wallet sends the payment.
+// Customer switches payment method before paying: drop this order, free the code.
+app.post('/api/orders/:id/cancel', rateLimit(20, 10 * 60 * 1000), wrap((req, res) => {
+  const order = getOrderForCustomer(req.params.id, req.body?.token);
+  if (!order) return res.status(404).json({ error: 'Order not found.' });
+  if (!cancelOrder(order.id)) return res.status(409).json({ error: 'This order can no longer be changed.' });
+  res.json({ ok: true });
+}));
+
+// Browser reports the txHash right after the wallet sends the payment (EVM networks).
 app.post('/api/orders/:id/tx', rateLimit(20, 10 * 60 * 1000), wrap((req, res) => {
   const order = getOrderForCustomer(req.params.id, req.body?.token);
   if (!order) return res.status(404).json({ error: 'Order not found.' });
@@ -117,7 +130,7 @@ app.post('/api/orders/:id/tx', rateLimit(20, 10 * 60 * 1000), wrap((req, res) =>
   // The hash is only a hint. Nothing is marked paid until the chain confirms
   // the exact amount reached our wallet in the real token contract.
   db.prepare('UPDATE orders SET claimed_tx = ? WHERE id = ?').run(txHash, order.id);
-  verifyClaim(txHash);
+  verifyClaim(order.network, txHash);
   res.json({ order: publicOrder({ ...order, claimed_tx: txHash }) });
 }));
 
@@ -143,21 +156,46 @@ app.get('/api/admin/overview', (req, res) => {
   }));
   const orders = db.prepare(`
     SELECT o.id, o.status, o.email, o.amount_units, o.tx_hash, o.claimed_tx, o.payer, o.created_at, o.paid_at,
-           p.name AS product_name, p.face_value_inr
+           o.network, o.token_symbol, o.decimals, p.name AS product_name, p.face_value_inr
     FROM orders o JOIN products p ON p.id = o.product_id
-    ORDER BY o.created_at DESC LIMIT 200`).all().map((o) => ({ ...o, amount: formatUnits(o.amount_units) }));
+    ORDER BY o.created_at DESC LIMIT 200`).all().map((o) => ({ ...o, amount: formatUnits(o.amount_units, o.decimals) }));
   const unmatched = db.prepare('SELECT * FROM unmatched_payments ORDER BY seen_at DESC LIMIT 100').all()
-    .map((u) => ({ ...u, amount: formatUnits(u.value_units) }));
-  // Summed as BigInt: 18-decimal amounts overflow SQLite integers.
-  const paidRows = db.prepare(`SELECT amount_units FROM orders WHERE status IN ('paid','needs_code')`).all();
-  const totals = { n: paidRows.length, units: paidRows.reduce((a, r) => a + BigInt(r.amount_units), 0n) };
+    .map((u) => ({ ...u, amount: formatUnits(u.value_units, u.decimals ?? config.network.token.decimals) }));
+  // Totals per network+token, summed as BigInt (18-decimal amounts overflow SQLite integers).
+  const paidRows = db.prepare(`SELECT amount_units, network, token_symbol, decimals FROM orders WHERE status IN ('paid','needs_code')`).all();
+  const byOption = {};
+  for (const r of paidRows) {
+    const k = `${r.token_symbol} on ${r.network}`;
+    byOption[k] = byOption[k] || { units: 0n, decimals: r.decimals };
+    byOption[k].units += BigInt(r.amount_units);
+  }
+  const received = Object.entries(byOption).map(([k, v]) => `${formatUnits(v.units, v.decimals)} ${k}`);
+  // USD-stable total (USDT/USDC ~ $1), for the headline number
+  const usdTotal = Object.values(byOption).reduce((a, v) => a + Number(formatUnits(v.units, v.decimals)), 0);
   res.json({
-    rate: { rate, source, updatedAt },
-    network: config.network, wallet: config.wallet, chain: chainStatus,
-    totals: { orders: totals.n, received: formatUnits(totals.units) },
+    rate: { rate, source, updatedAt }, rates: allRates(),
+    network: { ...publicNetwork(config.network), token: config.network.token }, wallet: config.wallet, tronWallet: config.tronWallet, chain: chainStatus,
+    networks: config.networks.map((n) => ({
+      ...publicNetwork(n),
+      main: n.key === config.network.key,
+      ready: n.ready, missing: n.missing,
+      recipient: n.recipient,
+      rpcSource: n.rpcSource, rpcEnvKey: n.rpcEnvKey,
+      tokens: n.tokens.map((t) => ({ symbol: t.symbol, id: `${n.key}:${t.symbol}`, enabled: n.ready && isOptionEnabled(`${n.key}:${t.symbol}`) })),
+      openOrders: openOrdersOn(n.key),
+      status: networkStatus[n.key] || { ok: null, watching: false },
+    })),
+    totals: { orders: paidRows.length, received: usdTotal.toFixed(2), receivedBreakdown: received },
     products, orders, unmatched,
   });
 });
+
+// Switch payment options (network + coin) on/off for the checkout.
+app.post('/api/admin/payments', wrap((req, res) => {
+  const enabled = setEnabledOptions(req.body?.enabled);
+  console.log(`[payments] enabled: ${enabled.join(', ')}`);
+  res.json({ enabled });
+}));
 
 const COLOR = /^#[0-9a-fA-F]{6}$/;
 function readProduct(body, partial = false) {

@@ -2,7 +2,28 @@
 
 Customer **USDT (BEP-20, BNB Smart Chain)** se gift card khareedta hai: wallet connect karke (Reown/WalletConnect), ya exchange/Trust Wallet se seedha address par bhej ke. Verification tumhara apna server blockchain se karta hai. Payment confirm hote hi code screen par aa jata hai.
 
-Network `NETWORK` setting se badalta hai: `bsc` (USDT, default), `base` (USDC), `base-sepolia` (free test USDC).
+## Multiple networks (BSC, TRON, Arbitrum, Polygon, Base, Ethereum)
+
+Checkout mein customer **"Pay with"** se coin aur network chunta hai: USDT ya USDC, BSC / TRON / Arbitrum / Polygon / Base / Ethereum par.
+
+| Setting | Kya daalna hai |
+|---|---|
+| `NETWORK` | Main network (AI billing isi par), jaise `bsc` |
+| `ENABLED_NETWORKS` | Sirf shuruaat ka default. Asli on/off **admin panel → Payment networks** se hota hai |
+| `RECEIVING_WALLET` | Tumhara EVM wallet `0x...`. Saare EVM networks ka paisa isi address par aata hai |
+| `TRON_RECEIVING_WALLET` | TRON wallet `T...` (Trust Wallet ke TRON account ya TronLink se) |
+| `TRONGRID_API_KEY` | trongrid.io se free key (recommended) |
+| `RPC_URL_ARBITRUM`, `RPC_URL_POLYGON`, `RPC_URL_BASE`, `RPC_URL_ETHEREUM` | Har network ka apna RPC (Ankr). Khaali = free public RPC |
+| `ENABLED_TOKENS` | Sirf USDT chahiye to `USDT` (khaali = USDT aur USDC dono) |
+
+- EVM networks par customer wallet se pay karta hai (MetaMask/Trust), network apne aap switch hota hai. Exchange se bhi bhej sakta hai.
+- TRON par customer address + exact amount (QR ke saath) par bhejta hai. Server TronGrid se 1-2 minute mein khud pakad leta hai.
+- Har order ka amount us network + coin par unique hota hai, isliye payments aapas mein mix nahi hoti.
+- **Admin panel → Payment networks:** har network ka on/off switch, har coin (USDT/USDC) ka alag checkbox, status aur RPC info. **Save changes** dabate hi checkout badal jata hai, Render chhune ki zaroorat nahi. Setting database mein save rehti hai.
+- Band kiye network par naye orders nahi bante, lekin jin customers ka order pehle se khula hai unka payment server tab tak pakadta rehta hai jab tak wo order band na ho jaye. Uske baad us network ki blockchain checking ruk jaati hai (RPC credits bachte hain).
+- TRON switch tab tak band rehta hai jab tak Render mein `TRON_RECEIVING_WALLET` na ho. Card par ye likha aata hai.
+- Kam se kam ek payment option hamesha on rehna chahiye. AI billing hamesha main network par chalti hai, in switches se uspar asar nahi padta.
+- Ethereum par fees zyada hai; chaho to `ENABLED_NETWORKS` se hata do.
 
 ```
 giftcardcrypto/          <- GitHub repo ka top level yahi hona chahiye

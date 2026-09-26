@@ -1,40 +1,44 @@
 import { createAppKit } from '@reown/appkit';
 import { WagmiAdapter } from '@reown/appkit-adapter-wagmi';
-import { base, baseSepolia, bsc, bscTestnet } from '@reown/appkit/networks';
+import { base, baseSepolia, bsc, bscTestnet, mainnet, arbitrum, polygon } from '@reown/appkit/networks';
 import { defineChain, http } from 'viem';
 import { connect, getAccount, getConnectors, switchChain, injected, createConfig } from '@wagmi/core';
 
 /** Pick the AppKit network object for the store's chain. */
 function networkFor(cfg) {
-  const known = { [bsc.id]: bsc, [bscTestnet.id]: bscTestnet, [base.id]: base, [baseSepolia.id]: baseSepolia };
+  const known = { [bsc.id]: bsc, [bscTestnet.id]: bscTestnet, [base.id]: base, [baseSepolia.id]: baseSepolia, [mainnet.id]: mainnet, [arbitrum.id]: arbitrum, [polygon.id]: polygon };
   if (known[cfg.network.chainId]) return known[cfg.network.chainId];
   // Local test chain
   return defineChain({
     id: cfg.network.chainId,
     name: cfg.network.name,
     nativeCurrency: { name: cfg.network.gasToken, symbol: cfg.network.gasToken, decimals: 18 },
-    rpcUrls: { default: { http: [cfg.network.publicRpc] } },
+    rpcUrls: { default: { http: [cfg.network.browserRpc || cfg.network.publicRpc] } },
     caipNetworkId: `eip155:${cfg.network.chainId}`,
     chainNamespace: 'eip155',
   });
 }
 
 export function initWallet(cfg, description) {
-  const network = networkFor(cfg);
-  // Read-only calls (balance, allowance) go to our chosen public RPC, not to
+  // Every EVM network the store accepts (main network first).
+  const evmNets = [cfg.network, ...(cfg.payOptions || []).map((o) => o.network)]
+    .filter((n, i, all) => n.family !== 'tron' && n.chainId && all.findIndex((m) => m.chainId === n.chainId) === i);
+  const networks = evmNets.map((n) => networkFor({ network: n }));
+  const network = networks[0];
+  // Read-only calls (balance, allowance) go to our chosen public RPCs, not to
   // Reown's RPC, so they keep working on Reown's free plan or without Reown.
-  const transports = { [network.id]: http(cfg.network.browserRpc || cfg.network.publicRpc) };
+  const transports = Object.fromEntries(evmNets.map((n, i) => [networks[i].id, http(n.browserRpc || n.publicRpc)]));
 
   if (!cfg.projectId) {
     // No Reown: direct wallet connections only (extension / in-wallet browser).
-    const wagmi = createConfig({ chains: [network], connectors: [injected()], transports });
+    const wagmi = createConfig({ chains: networks, connectors: [injected()], transports });
     return { appkit: null, wagmi, network };
   }
 
-  const adapter = new WagmiAdapter({ projectId: cfg.projectId, networks: [network], transports });
+  const adapter = new WagmiAdapter({ projectId: cfg.projectId, networks, transports });
   const appkit = createAppKit({
     adapters: [adapter],
-    networks: [network],
+    networks,
     defaultNetwork: network,
     projectId: cfg.projectId,
     metadata: {
@@ -67,6 +71,9 @@ export function friendlyWalletError(e, cfg) {
 const CHAIN_PARAMS = {
   56: { chainId: '0x38', chainName: 'BNB Smart Chain', nativeCurrency: { name: 'BNB', symbol: 'BNB', decimals: 18 }, rpcUrls: ['https://bsc-dataseed.bnbchain.org'], blockExplorerUrls: ['https://bscscan.com'] },
   97: { chainId: '0x61', chainName: 'BNB Smart Chain Testnet', nativeCurrency: { name: 'tBNB', symbol: 'tBNB', decimals: 18 }, rpcUrls: ['https://bsc-testnet-rpc.publicnode.com'], blockExplorerUrls: ['https://testnet.bscscan.com'] },
+  1: { chainId: '0x1', chainName: 'Ethereum', nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 }, rpcUrls: ['https://ethereum-rpc.publicnode.com'], blockExplorerUrls: ['https://etherscan.io'] },
+  42161: { chainId: '0xa4b1', chainName: 'Arbitrum One', nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 }, rpcUrls: ['https://arb1.arbitrum.io/rpc'], blockExplorerUrls: ['https://arbiscan.io'] },
+  137: { chainId: '0x89', chainName: 'Polygon', nativeCurrency: { name: 'POL', symbol: 'POL', decimals: 18 }, rpcUrls: ['https://polygon-rpc.com'], blockExplorerUrls: ['https://polygonscan.com'] },
   8453: { chainId: '0x2105', chainName: 'Base', nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 }, rpcUrls: ['https://mainnet.base.org'], blockExplorerUrls: ['https://basescan.org'] },
 };
 
@@ -103,7 +110,7 @@ export async function connectWallet({ appkit, wagmi }) {
 export function openInWalletLinks(cfg) {
   const url = window.location.href;
   const bare = url.replace(/^https?:\/\//, '');
-  const trustCoin = { 56: 20000714, 97: 20000714, 8453: 8453 }[cfg.network.chainId] || 60;
+  const trustCoin = { 56: 20000714, 97: 20000714, 8453: 8453, 42161: 10042221, 137: 966 }[cfg.network.chainId] || 60;
   return {
     trust: `https://link.trustwallet.com/open_url?coin_id=${trustCoin}&url=${encodeURIComponent(url)}`,
     metamask: `https://metamask.app.link/dapp/${bare}`,
@@ -138,8 +145,8 @@ const timeout = (p, ms) => Promise.race([p, new Promise((_, r) => setTimeout(() 
  * talk to them directly (and add the network if they don't know it). Returns
  * true when the wallet ends up on the right chain.
  */
-export async function switchToStoreChain(cfg, wagmi) {
-  const want = cfg.network.chainId;
+export async function switchToStoreChain(cfg, wagmi, chainId) {
+  const want = chainId || cfg.network.chainId;
   if (getAccount(wagmi).chainId === want) return true;
   const acct = getAccount(wagmi);
   const injectedConn = acct.connector?.type === 'injected' && hasInjected();
@@ -165,6 +172,6 @@ export async function switchToStoreChain(cfg, wagmi) {
   return getAccount(wagmi).chainId === want;
 }
 
-export function switchHelpText(cfg) {
-  return `Switch your wallet to ${cfg.network.name} yourself: in MetaMask use the network button at the top; in Trust Wallet's browser tap the chain icon at the top. Then refresh this page.`;
+export function switchHelpText(cfg, net = cfg.network) {
+  return `Switch your wallet to ${net.name} yourself: in MetaMask use the network button at the top; in Trust Wallet's browser tap the chain icon at the top. Then refresh this page.`;
 }

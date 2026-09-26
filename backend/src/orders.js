@@ -1,7 +1,8 @@
 import crypto from 'node:crypto';
 import { db } from './db.js';
-import { config } from './config.js';
-import { getRate, priceUnits, formatUnits, TAIL_STEP } from './pricing.js';
+import { config, findOption, findNetwork, publicNetwork } from './config.js';
+import { activeOptions, isOptionEnabled } from './payments.js';
+import { getRate, priceUnits, formatUnits, tailStep } from './pricing.js';
 
 const lateMs = () => config.latePaymentHours * 3600 * 1000;
 
@@ -14,15 +15,21 @@ export class OrderError extends Error {
  * that a late payment could still arrive. No two of these may share an amount,
  * which is how an incoming transfer is matched to exactly one order.
  */
-function amountTaken(amountUnits, now) {
+function amountTaken(networkKey, tokenAddress, amountUnits, now) {
   return !!db.prepare(`
     SELECT 1 FROM orders
-    WHERE amount_units = ? AND tx_hash IS NULL
+    WHERE network = ? AND token_address = ? AND amount_units = ? AND tx_hash IS NULL
       AND (status = 'pending' OR (status = 'expired' AND expires_at > ?))
-    LIMIT 1`).get(amountUnits, now - lateMs());
+    LIMIT 1`).get(networkKey, tokenAddress, amountUnits, now - lateMs());
 }
 
-export const createOrder = db.transaction((productId, email) => {
+export const createOrder = db.transaction((productId, email, payWith) => {
+  if (payWith && !(findOption(payWith) && isOptionEnabled(payWith))) {
+    throw new OrderError(400, 'That payment method is not available right now. Pick another one.');
+  }
+  const option = payWith ? findOption(payWith) : activeOptions()[0];
+  if (!option) throw new OrderError(503, 'Payments are paused right now. Please try again later.');
+  const { network, token } = option;
   const product = db.prepare('SELECT * FROM products WHERE id = ? AND active = 1').get(productId);
   if (!product) throw new OrderError(404, 'This card is no longer available.');
 
@@ -30,26 +37,39 @@ export const createOrder = db.transaction((productId, email) => {
   if (!code) throw new OrderError(409, 'This card is out of stock right now.');
 
   const now = Date.now();
-  const { rate } = getRate();
-  const base = priceUnits(product, rate);
+  const { rate } = getRate(token.symbol);
+  const base = priceUnits(product, rate, token.decimals);
 
   // Add a unique 0.0001–0.0099 tail so the exact amount identifies the order
   // (99 open orders per price point).
   let amount = null;
   for (let i = 0; i < 300; i++) {
-    const candidate = (base + BigInt(crypto.randomInt(1, 100)) * TAIL_STEP).toString();
-    if (!amountTaken(candidate, now)) { amount = candidate; break; }
+    const candidate = (base + BigInt(crypto.randomInt(1, 100)) * tailStep(token.decimals)).toString();
+    if (!amountTaken(network.key, token.address, candidate, now)) { amount = candidate; break; }
   }
   if (!amount) throw new OrderError(503, 'Too many open orders at this price. Try again in a minute.');
 
   const id = crypto.randomBytes(8).toString('hex');
-  const token = crypto.randomBytes(24).toString('base64url');
-  db.prepare(`INSERT INTO orders(id, access_token, product_id, email, amount_units, usdc_inr_rate, created_at, expires_at)
-              VALUES(?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(id, token, productId, email || null, amount, rate, now, now + config.orderTtlMin * 60 * 1000);
+  const accessToken = crypto.randomBytes(24).toString('base64url');
+  db.prepare(`INSERT INTO orders(id, access_token, product_id, email, amount_units, usdc_inr_rate, created_at, expires_at,
+                                 network, token_symbol, token_address, decimals)
+              VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, accessToken, productId, email || null, amount, rate, now, now + config.orderTtlMin * 60 * 1000,
+      network.key, token.symbol, token.address, token.decimals);
   db.prepare(`UPDATE codes SET status = 'reserved', order_id = ? WHERE id = ?`).run(id, code.id);
 
-  return { id, token };
+  return { id, token: accessToken };
+});
+
+/** Customer wants a different payment method: drop this order and free its code. */
+export const cancelOrder = db.transaction((orderId) => {
+  const o = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
+  if (!o || o.status !== 'pending' || o.claimed_tx || o.tx_hash) return false;
+  // Expire it but keep its amount reserved for the late-payment window, in case
+  // the customer had already sent money.
+  db.prepare(`UPDATE orders SET status = 'expired', expires_at = ? WHERE id = ?`).run(Date.now(), orderId);
+  db.prepare(`UPDATE codes SET status = 'available', order_id = NULL WHERE status = 'reserved' AND order_id = ?`).run(orderId);
+  return true;
 });
 
 /** Mark an order paid for a verified transfer and hand over a code. Idempotent. */
@@ -73,15 +93,15 @@ export const settleOrder = db.transaction((orderId, txHash, payer) => {
   return true;
 });
 
-/** Find the open order a transfer of exactly `valueUnits` belongs to. */
-export function findOrderForPayment(valueUnits, txHash) {
+/** Find the open order a transfer of exactly `valueUnits` of this token on this network belongs to. */
+export function findOrderForPayment(networkKey, tokenAddress, valueUnits, txHash) {
   const now = Date.now();
   return db.prepare(`
     SELECT * FROM orders
-    WHERE amount_units = ? AND tx_hash IS NULL
+    WHERE network = ? AND lower(token_address) = lower(?) AND amount_units = ? AND tx_hash IS NULL
       AND (status = 'pending' OR (status = 'expired' AND expires_at > ?))
     ORDER BY (claimed_tx = ?) DESC, created_at DESC
-    LIMIT 1`).get(valueUnits, now - lateMs(), txHash);
+    LIMIT 1`).get(networkKey, tokenAddress, valueUnits, now - lateMs(), txHash);
 }
 
 export function expireOrders() {
@@ -121,6 +141,7 @@ export function getOrderForCustomer(id, token) {
 }
 
 export function publicOrder(order) {
+  const net = findNetwork(order.network);
   const product = db.prepare('SELECT * FROM products WHERE id = ?').get(order.product_id);
   const code = order.status === 'paid' && order.code_id
     ? db.prepare('SELECT code FROM codes WHERE id = ?').get(order.code_id)?.code
@@ -130,7 +151,10 @@ export function publicOrder(order) {
     status: order.status,
     product: { name: product.name, brand: product.brand, face_value_inr: product.face_value_inr, color: product.color },
     amount_units: order.amount_units,
-    amount: formatUnits(order.amount_units),
+    amount: formatUnits(order.amount_units, order.decimals),
+    network: net ? publicNetwork(net) : { key: order.network, name: order.network, family: 'evm' },
+    token: { symbol: order.token_symbol, address: order.token_address, decimals: order.decimals },
+    recipient: net?.recipient || null,
     expires_at: order.expires_at,
     claimed_tx: order.claimed_tx,
     tx_hash: order.tx_hash,

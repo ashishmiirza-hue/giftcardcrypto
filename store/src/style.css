@@ -289,7 +289,7 @@ td input { font: inherit; width: 80px; padding: 6px 8px; border: 1px solid var(-
 .price-card .v { font: 800 2.4rem/1.1 var(--display); letter-spacing: -.02em; }
 .ai-grid { display: grid; grid-template-columns: 1.3fr 1fr; gap: 24px; align-items: start; }
 .ai-setup { gap: 16px; }
-.setup-steps { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; font-size: .82rem; color: var(--muted); counter-reset: st; }
+.setup-steps { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; font-size: .82rem; color: var(--muted); counter-reset: st; }
 .setup-steps li { border-top: 3px solid var(--line); padding-top: 6px; counter-increment: st; }
 .setup-steps li::before { content: counter(st) ". "; }
 .setup-steps li.done { border-color: var(--ok); color: var(--ink); }
@@ -340,3 +340,11 @@ ul.plain strong { color: var(--ink); }
 .wallet-chooser { border: 1px solid var(--line); border-radius: var(--r-md); padding: 16px; display: flex; flex-direction: column; gap: 10px; background: var(--surface); }
 .wc-title { font-weight: 700; font-size: 1.05rem; }
 .wc-btn { text-decoration: none; }
+
+/* ---------- TRON pay ---------- */
+.tron-pay { display: flex; gap: 16px; align-items: center; border: 1px solid var(--line); border-radius: var(--r-md); padding: 14px; }
+.tron-pay .qr { flex: none; width: 128px; height: 128px; border-radius: 8px; background: var(--paper); image-rendering: pixelated; }
+.tron-fields { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
+.tron-notes { gap: 8px; }
+.field select { font: 400 1rem var(--body); padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-sm); background: #fff; color: var(--ink); min-height: 48px; width: 100%; }
+@media (max-width: 420px) { .tron-pay { flex-direction: column; align-items: stretch; } .tron-pay .qr { align-self: center; } }
