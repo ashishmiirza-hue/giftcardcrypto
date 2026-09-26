@@ -81,6 +81,8 @@ function renderBilling() {
   const setIfIdle = (id, v) => { const el = $(id); if (document.activeElement !== el) el.value = v; };
   setIfIdle('#s-price', s.pricePer1k); setIfIdle('#s-approve', s.defaultApprove);
   setIfIdle('#s-charge', s.defaultMaxPerCharge); setIfIdle('#s-period', s.defaultMaxPerPeriod);
+  setIfIdle('#s-min', s.minApproval);
+  $('label[for="s-min"]').textContent = `Minimum approval (${sym})`;
   $('label[for="s-price"]').textContent = `Price per 1,000 tokens (${sym})`;
 
   const sel = $('#u-wallet'); const cur = sel.value;
@@ -91,18 +93,19 @@ function renderBilling() {
   updateCost();
 
   $('#billing-accounts').innerHTML = bill.accounts.length ? `
-    <thead><tr><th>Customer</th><th>On-chain</th><th>Limits (charge / 30d)</th><th>Left 30d</th><th>Approved</th><th>Balance</th><th>Tokens</th><th>Due</th><th>Can charge now</th><th>Amount</th><th></th><th></th></tr></thead>
+    <thead><tr><th>Customer</th><th>On-chain</th><th>Limits (charge / 30d)</th><th>Left 30d</th><th>Approved</th><th>Balance</th><th>Tokens</th><th>Due</th><th>Credit left</th><th>Can charge now</th><th>Amount</th><th></th><th></th></tr></thead>
     <tbody>${bill.accounts.map((a) => {
       const c = a.chain || {};
       return `<tr data-wallet="${a.wallet}">
         <td>${link('address', a.wallet, a.label || short(a.wallet))}${a.email ? `<br/><span class="small">${esc(a.email)}</span>` : ''}${a.blocked ? ' <span class="pill off">Blocked</span>' : ''}</td>
-        <td>${c.active ? '<span class="pill on">Active</span>' : (c.allowance && Number(c.allowance) > 0) || c.allowance === 'unlimited' ? '<span class="pill warn">Approved only</span><br/><span class="small">not activated yet</span>' : '<span class="pill off">Off</span>'}</td>
+        <td>${c.active ? '<span class="pill on">Active</span>' : (c.allowance && Number(c.allowance) > 0) || c.allowance === 'Unlimited' ? '<span class="pill warn">Approved only</span><br/><span class="small">not activated yet</span>' : '<span class="pill off">Off</span>'}</td>
         <td>${c.active ? `${esc(c.maxPerCharge)} / ${esc(c.maxPerPeriod)}` : '-'}</td>
         <td>${esc(c.remainingInPeriod ?? '-')}</td>
         <td>${esc(c.allowance ?? '-')}</td>
         <td>${esc(c.balance ?? '-')}</td>
         <td>${Number(a.tokensUsed).toLocaleString('en-IN')}</td>
         <td><strong>${esc(a.due)}</strong>${Number(a.inFlight) > 0 ? `<br/><span class="small">${esc(a.inFlight)} in progress</span>` : ''}</td>
+        <td>${a.usable ? esc(a.creditLeft) : `<span class="pill off">Paused</span><br/><span class="small">${esc(a.creditReason || '')}</span>`}</td>
         <td>${Number(a.chargeableNow) > 0 ? esc(a.chargeableNow) : `<span class="small">${esc(a.cannotChargeReason || '0')}</span>`}</td>
         <td><input class="amt-in" type="number" min="0" step="0.01" placeholder="${esc(a.chargeableNow)}" aria-label="Amount to charge" /></td>
         <td><button class="btn btn-primary btn-sm" data-charge="${a.wallet}" type="button" ${Number(a.chargeableNow) > 0 && st.keeperConfigured ? '' : 'disabled'}>Charge</button></td>
@@ -341,6 +344,7 @@ document.addEventListener('click', async (e) => {
       await api('/api/admin/billing/settings', { method: 'POST', body: {
         pricePer1k: $('#s-price').value, defaultApprove: $('#s-approve').value,
         defaultMaxPerCharge: $('#s-charge').value, defaultMaxPerPeriod: $('#s-period').value,
+        minApproval: $('#s-min').value,
       } });
       await load();
       return toast('Billing settings saved');

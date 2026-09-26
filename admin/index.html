@@ -111,6 +111,10 @@
             <div class="field"><label for="s-charge">Default max per charge</label><input id="s-charge" type="number" min="1" step="1" /></div>
             <div class="field"><label for="s-period">Default max per 30 days</label><input id="s-period" type="number" min="1" step="1" /></div>
           </div>
+          <div class="row">
+            <div class="field"><label for="s-min">Minimum approval</label><input id="s-min" type="number" min="0" step="1" />
+              <span class="hint">0 = no minimum, customer approves whatever they like. Service still stops when their approved amount is used up.</span></div>
+          </div>
           <p class="small">New prices apply to usage recorded from now on. Defaults only pre-fill the customer's form; each customer sets their own limits on-chain.</p>
           <button class="btn btn-ghost" id="save-billing" type="button">Save settings</button>
         </div>

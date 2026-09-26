@@ -65,13 +65,19 @@ Header: `x-service-key: <SERVICE_API_KEY>`
 
 ```
 POST /api/service/check   { "apiKey": "sk_..." }
-  -> { "ok": true, "wallet": "0x...", "due": "3.20", "remainingInPeriod": "180.00" }
+  -> { "ok": true, "wallet": "0x...", "creditLeft": "18.50", "tokensLeft": 9250000, "due": "11.50" }
 
 POST /api/service/usage   { "apiKey": "sk_...", "tokens": 1532, "note": "chat" }
-  -> { "cost": "0.0031", "due": "3.2031" }
+  -> { "cost": "0.0031", "due": "11.5031", "creditLeft": "18.4969", "tokensLeft": 9248468, "stop": false }
 ```
 
-`check` ka `ok: false` ho (key galat, billing cancelled, approval hataya, admin ne block kiya) to request serve mat karo.
+**Har request se pehle `check` karo, aur `ok: false` ho to serve mat karo.** `tokensLeft` se zyada ek request mein mat do.
+`usage` ka jawab `stop: true` de to agli request serve mat karo.
+
+"Credit left" = customer se abhi kitna le sakte hain (approval, wallet balance aur 30-din ki limit mein se jo sabse kam ho) minus jo pehle se due hai.
+Customer apne wallet (Bitget, MetaMask, Trust) mein approval kabhi bhi kam ya zero kar sakta hai, isliye server ise har baar blockchain se dobara padhta hai (15 second cache).
+Default: customer ke liye **No spending limit** aur **Unlimited approval** pehle se tick hote hain (customer chahe to untick karke apni limit laga sakta hai). Admin → Billing settings → **Minimum approval**: 0 (default) = koi minimum nahi (customer jitna chahe approve kare). Koi number daaloge to usse kam approval par API key kaam nahi karegi.
+
 Usage se sirf "Due" badhta hai; paisa tabhi katta hai jab tum admin se **Charge** dabate ho.
 
 > Asli customers se pehle contract kisi experienced Solidity developer se ek baar review karwa lena.

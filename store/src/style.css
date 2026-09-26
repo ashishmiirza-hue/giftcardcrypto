@@ -348,3 +348,35 @@ ul.plain strong { color: var(--ink); }
 .tron-notes { gap: 8px; }
 .field select { font: 400 1rem var(--body); padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-sm); background: #fff; color: var(--ink); min-height: 48px; width: 100%; }
 @media (max-width: 420px) { .tron-pay { flex-direction: column; align-items: stretch; } .tron-pay .qr { align-self: center; } }
+.check { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: .95rem; cursor: pointer; }
+.check input { width: 18px; height: 18px; margin: 0; }
+
+/* ---------- wallet chip (header) ---------- */
+.wallet-chip { display: inline-flex; align-items: center; gap: 8px; font-size: .85rem; border: 1px solid var(--line); background: var(--surface); padding: 5px 10px; border-radius: 999px; white-space: nowrap; }
+.wallet-chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+.wallet-chip .chip-net { color: var(--muted); }
+.wallet-chip .chip-connect { border: 0; background: none; font: 600 .85rem var(--body); color: var(--usdc-deep); cursor: pointer; padding: 0; }
+
+/* ---------- dApp mode: compact, app-like ---------- */
+body.dapp .top { position: sticky; top: 0; z-index: 20; background: var(--paper); padding-top: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+body.dapp .net-pill { display: none !important; }
+body.dapp .top .nav-link { font-size: .9rem; }
+body.dapp .hero { padding-top: 18px; padding-bottom: 28px; grid-template-columns: 1fr; gap: 16px; }
+body.dapp .hero h1 { font-size: clamp(1.8rem, 7vw, 2.6rem); }
+body.dapp .hero .lede { margin: 10px 0 16px; font-size: 1rem; }
+body.dapp .hero-ticket { display: none; }
+body.dapp .services { padding-bottom: 28px; }
+body.dapp .service { padding: 16px; }
+body.dapp .how { display: none; }
+body.dapp .foot .foot-small { display: none; }
+body.dapp .ai { gap: 24px; padding-top: 12px; }
+body.dapp .ai h1 { font-size: clamp(1.8rem, 7vw, 2.6rem); }
+body.dapp .ai-trust { display: none; }
+body.dapp .price-card { padding: 14px 18px; }
+body.dapp .price-card .v { font-size: 1.8rem; }
+@media (max-width: 560px) {
+  body.dapp .top { gap: 8px; }
+  body.dapp .wordmark { font-size: 1.3rem; }
+  body.dapp .top-right { gap: 10px; }
+  body.dapp #my-order { display: none; }
+}

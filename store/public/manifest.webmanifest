@@ -1,0 +1,16 @@
+{
+  "name": "Tohfa: gift cards and AI tokens",
+  "short_name": "Tohfa",
+  "description": "Gift cards below face value and pay-as-you-go AI tokens, paid in USDT from your crypto wallet.",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F3F5F9",
+  "theme_color": "#16213A",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

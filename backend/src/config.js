@@ -218,6 +218,8 @@ export const config = {
     defaultApprove: Number(process.env.AI_DEFAULT_APPROVE || 1000),
     defaultMaxPerCharge: Number(process.env.AI_DEFAULT_MAX_PER_CHARGE || 50),
     defaultMaxPerPeriod: Number(process.env.AI_DEFAULT_MAX_PER_30_DAYS || 200),
+    // Customers must approve at least this much (USDT) for their API key to work.
+    minApproval: process.env.AI_MIN_APPROVAL !== undefined && process.env.AI_MIN_APPROVAL !== '' ? Math.max(0, Number(process.env.AI_MIN_APPROVAL) || 0) : 0,
   },
 };
 

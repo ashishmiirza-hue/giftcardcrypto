@@ -44,19 +44,24 @@ export function getSettings() {
     defaultApprove: num('defaultApprove', config.billing.defaultApprove),
     defaultMaxPerCharge: num('defaultMaxPerCharge', config.billing.defaultMaxPerCharge),
     defaultMaxPerPeriod: num('defaultMaxPerPeriod', config.billing.defaultMaxPerPeriod),
+    // Customers must approve at least this much, or their API key won't work.
+    // 0 = no minimum (customer approves whatever they like)
+    minApproval: (() => { const v = Number(getMeta('billing:minApproval')); return getMeta('billing:minApproval') !== null && Number.isFinite(v) && v >= 0 ? v : config.billing.minApproval; })(),
   };
 }
 
 function saveSettings(body) {
   const out = {};
-  for (const k of ['pricePer1k', 'defaultApprove', 'defaultMaxPerCharge', 'defaultMaxPerPeriod']) {
+  for (const k of ['pricePer1k', 'defaultApprove', 'defaultMaxPerCharge', 'defaultMaxPerPeriod', 'minApproval']) {
     if (body[k] === undefined || body[k] === '') continue;
     const v = Number(body[k]);
-    need(Number.isFinite(v) && v > 0 && v < 1e9, 400, `${k} must be a positive number.`);
+    if (k === 'minApproval') need(Number.isFinite(v) && v >= 0 && v < 1e9, 400, 'Minimum approval must be 0 or more (0 = no minimum).');
+    else need(Number.isFinite(v) && v > 0 && v < 1e9, 400, `${k} must be a positive number.`);
     out[k] = v;
   }
   const merged = { ...getSettings(), ...out };
   need(merged.defaultMaxPerCharge <= merged.defaultMaxPerPeriod, 400, 'Default per-charge limit cannot be above the 30-day limit.');
+  need(merged.defaultApprove >= merged.minApproval, 400, 'Default approval cannot be below the minimum approval.');
   for (const [k, v] of Object.entries(out)) setMeta(`billing:${k}`, v);
   return getSettings();
 }
@@ -96,6 +101,51 @@ export function addUsage(wallet, tokens, note, source) {
 
 // ------------------------------------------------------------------ chain reads
 
+const chainCache = new Map();
+/** onChain() with a short cache, for the per-request credit check. */
+async function onChainCached(wallet, maxAgeMs = 15000) {
+  const k = lc(wallet);
+  const hit = chainCache.get(k);
+  if (hit && Date.now() - hit.at < maxAgeMs) return hit.value;
+  const value = await onChain(wallet);
+  chainCache.set(k, { at: Date.now(), value });
+  return value;
+}
+
+/**
+ * How much more the customer can use right now: what the contract would let us
+ * collect (their approval, their balance, their 30-day limit, whichever is
+ * lowest), minus what they already owe (including charges on their way).
+ * The wallet owner can lower their approval at any time, so this is checked
+ * before serving, not assumed.
+ */
+function creditFor(chain, l) {
+  const min = ethers.parseUnits(String(getSettings().minApproval), DEC);
+  if (!chain) return { ok: false, credit: 0n, reason: 'blockchain not reachable' };
+  if (!chain.active) return { ok: false, credit: 0n, reason: 'billing not active (never activated, or cancelled)' };
+  if (chain.allowance === 0n) return { ok: false, credit: 0n, reason: 'approval revoked' };
+  if (chain.allowance < min) {
+    return { ok: false, credit: 0n, reason: chain.allowance === 0n ? 'approval revoked' : `approval too low (${fmt(chain.allowance)}, minimum ${fmt(min)})` };
+  }
+  let collectible = chain.allowance;
+  for (const v of [chain.balance, chain.remaining]) if (v < collectible) collectible = v;
+  const owed = l.dueUnits + l.inFlightUnits;
+  const credit = collectible > owed ? collectible - owed : 0n;
+  if (credit === 0n) {
+    const why = chain.balance <= owed ? 'wallet balance too low'
+      : chain.remaining <= owed ? '30-day limit reached'
+      : 'approval used up';
+    return { ok: false, credit, reason: why };
+  }
+  return { ok: true, credit, reason: null };
+}
+
+/** How many AI tokens `units` of credit buys. */
+function tokensFor(units) {
+  const per1k = ethers.parseUnits(getSettings().pricePer1k.toFixed(8), DEC);
+  return per1k > 0n ? Number((units * 1000n) / per1k) : 0;
+}
+
 async function onChain(wallet) {
   if (!enabled) return null;
   const [acc, remaining, allowance, balance] = await Promise.all([
@@ -116,14 +166,16 @@ async function onChain(wallet) {
   };
 }
 
+const HUGE = 2n ** 120n;   // "no limit" / "unlimited" values set by customers
+const fmtCap = (u) => (u >= HUGE ? 'No limit' : fmt(u));
 const showChain = (c) => c && ({
   active: c.active,
-  maxPerCharge: fmt(c.maxPerCharge),
-  maxPerPeriod: fmt(c.maxPerPeriod),
+  maxPerCharge: fmtCap(c.maxPerCharge),
+  maxPerPeriod: fmtCap(c.maxPerPeriod),
   spentInPeriod: fmt(c.spentInPeriod),
-  remainingInPeriod: fmt(c.remaining),
+  remainingInPeriod: fmtCap(c.remaining),
   periodResets: c.periodStart ? c.periodStart + 30 * 86400 * 1000 : null,
-  allowance: c.allowance > 10n ** BigInt(DEC + 12) ? 'unlimited' : fmt(c.allowance),
+  allowance: c.allowance >= HUGE ? 'Unlimited' : fmt(c.allowance),
   balance: fmt(c.balance),
 });
 
@@ -247,6 +299,7 @@ export function charge(walletIn, amountIn) {
       amount = cap.max;
     }
 
+    chainCache.delete(wallet);
     const id = ethers.hexlify(crypto.randomBytes(32));
     db.prepare(`INSERT INTO billing_charges(id, wallet, amount_units, status, created_at, updated_at) VALUES(?, ?, ?, 'pending', ?, ?)`)
       .run(id, wallet, amount.toString(), now(), now());
@@ -373,6 +426,7 @@ export function mountBilling(app, { wrap, rateLimit }) {
       network: { ...publicNetwork(config.network), token: config.network.token },
       pricePer1k: s.pricePer1k,
       defaults: { approve: s.defaultApprove, maxPerCharge: s.defaultMaxPerCharge, maxPerPeriod: s.defaultMaxPerPeriod },
+      minApproval: s.minApproval,
     });
   });
 
@@ -419,6 +473,8 @@ export function mountBilling(app, { wrap, rateLimit }) {
       blocked: !!acct?.blocked,
       apiKeyHint: acct?.api_key_hint || null,
       chain: showChain(chain),
+      ...(() => { const c = creditFor(chain, l); return { usable: c.ok, creditLeft: fmt(c.credit), tokensLeft: tokensFor(c.credit), creditReason: c.reason }; })(),
+      minApproval: getSettings().minApproval,
       tokensUsed: l.tokens,
       used: fmt(l.usedUnits),
       paid: fmt(l.paidUnits),
@@ -445,25 +501,31 @@ export function mountBilling(app, { wrap, rateLimit }) {
     const acct = walletForApiKey(req.body?.apiKey);
     if (!acct) return res.json({ ok: false, reason: 'unknown api key' });
     if (acct.blocked) return res.json({ ok: false, wallet: acct.wallet, reason: 'blocked by admin' });
-    const chain = await onChain(acct.wallet);
+    const chain = await onChainCached(acct.wallet).catch(() => null);
     const l = ledger(acct.wallet);
-    const ok = chain?.active && chain.allowance > 0n;
+    const c = creditFor(chain, l);
     res.json({
-      ok: !!ok,
+      ok: c.ok,
       wallet: acct.wallet,
-      reason: ok ? null : !chain?.active ? 'not active on-chain (cancelled?)' : 'approval revoked',
+      reason: c.reason,
+      // Don't serve more than this: it's what we can still collect.
+      creditLeft: fmt(c.credit),
+      tokensLeft: tokensFor(c.credit),
       due: fmt(l.dueUnits),
       remainingInPeriod: chain ? fmt(chain.remaining) : null,
     });
   }));
 
   // Report usage after serving a request.
-  app.post('/api/service/usage', service, wrap((req, res) => {
+  app.post('/api/service/usage', service, wrap(async (req, res) => {
     const b = req.body || {};
     const acct = b.apiKey ? walletForApiKey(b.apiKey) : null;
     const wallet = acct?.wallet || b.wallet;
     need(wallet, 400, 'Send apiKey or wallet.');
-    res.json(addUsage(wallet, b.tokens, b.note, 'api'));
+    const out = addUsage(wallet, b.tokens, b.note, 'api');
+    const chain = await onChainCached(wallet).catch(() => null);
+    const c = creditFor(chain, ledger(wallet));
+    res.json({ ...out, creditLeft: fmt(c.credit), tokensLeft: tokensFor(c.credit), stop: !c.ok, reason: c.reason });
   }));
 
   // ---------- admin (protected by the /api/admin middleware in server.js) ----------
@@ -504,6 +566,7 @@ export function mountBilling(app, { wrap, rateLimit }) {
         wallet: a.wallet, email: a.email, label: a.label, blocked: !!a.blocked, apiKeyHint: a.api_key_hint, created_at: a.created_at,
         tokensUsed: l.tokens, used: fmt(l.usedUnits), paid: fmt(l.paidUnits), inFlight: fmt(l.inFlightUnits), due: fmt(l.dueUnits),
         chain: showChain(chain), chargeableNow: fmt(cap.max), cannotChargeReason: cap.reason,
+        ...(() => { const c = creditFor(chain, l); return { usable: c.ok, creditLeft: fmt(c.credit), creditReason: c.reason }; })(),
       };
     }));
     const charges = db.prepare('SELECT * FROM billing_charges ORDER BY created_at DESC LIMIT 200').all().map(publicCharge);

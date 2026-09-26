@@ -112,6 +112,21 @@ Testnet par free test karna ho: `NETWORK=base-sepolia`, test USDC faucet.circle.
 4. **Backup listener** har 10 second tumhare wallet mein aaye USDT padhta hai. Tab band ho jaye ya exchange se payment aaye, tab bhi order confirm hota hai.
 5. Jo payment kisi order se match nahi hoti, wo admin panel mein **"Payments with no matching order"** mein dikhti hai.
 
+## dApp mode (Trust Wallet, MetaMask, Bitget, OKX ke browser ke liye)
+
+Alag project nahi hai. **Yahi website** khud dApp mode mein chal jaati hai jab:
+- phone par kisi wallet ke andar ke browser mein khule, ya
+- `app.` ya `dapp.` subdomain par khule (jaise `app.tumhara-domain.com`), ya
+- URL mein `?dapp=1` ho (`?dapp=0` se band).
+
+dApp mode mein: wallet **apne aap connect** hota hai (Connect dabana nahi padta), header mein wallet chip (address + network), AI page par network apne aap BSC par switch, aur page chhota/app jaisa (lambe sections chhup jaate hain). Normal browser mein site pehle jaisi rehti hai.
+
+**Subdomain lagana (optional, listing ke liye achha):** Render → service → Settings → Custom Domains mein `app.tumhara-domain.com` add karo, aur domain ke DNS mein wahi CNAME daalo jo Render bataye. Isi server par chalega, code mein kuch nahi badalna. Reown use kar rahe ho to ye domain Reown allow-list mein bhi daalo.
+
+**Home screen app (PWA):** site par manifest aur icons hain (`store/public/`). Phone par Chrome/Safari mein "Add to Home Screen" karke app jaisa khulta hai. Icon badalna ho to `store/public/icon-*.png` replace karo.
+
+**Wallet listing ke liye assets:** logo `store/public/icon-512.png`, dApp URL `https://app.tumhara-domain.com`, network: BNB Smart Chain, category: Payments / Tools.
+
 ## AI token billing (approve + limits + admin se charge)
 
 Site par `/ai.html` page hai jahan customer wallet se USDT approve karke apni limits set karta hai. Tum admin panel ke **AI token billing** section se usage record karke **Charge** dabate ho. Contract deploy karne aur test karne ke poore steps: **`contracts/README.md`**.

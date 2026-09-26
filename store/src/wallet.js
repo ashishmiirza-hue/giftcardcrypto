@@ -2,7 +2,7 @@ import { createAppKit } from '@reown/appkit';
 import { WagmiAdapter } from '@reown/appkit-adapter-wagmi';
 import { base, baseSepolia, bsc, bscTestnet, mainnet, arbitrum, polygon } from '@reown/appkit/networks';
 import { defineChain, http } from 'viem';
-import { connect, getAccount, getConnectors, switchChain, injected, createConfig } from '@wagmi/core';
+import { connect, getAccount, getConnectors, switchChain, injected, createConfig, reconnect } from '@wagmi/core';
 
 /** Pick the AppKit network object for the store's chain. */
 function networkFor(cfg) {
@@ -32,6 +32,8 @@ export function initWallet(cfg, description) {
   if (!cfg.projectId) {
     // No Reown: direct wallet connections only (extension / in-wallet browser).
     const wagmi = createConfig({ chains: networks, connectors: [injected()], transports });
+    // returning visitor: reconnect silently if the wallet already allowed this site
+    reconnect(wagmi).catch(() => {});
     return { appkit: null, wagmi, network };
   }
 

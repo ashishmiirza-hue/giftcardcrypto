@@ -2,6 +2,7 @@ import { initWallet as createWallet, connectWallet, switchToStoreChain, switchHe
 import { writeContract, getAccount, watchAccount, readContract } from '@wagmi/core';
 import { erc20Abi, formatUnits } from 'viem';
 import QRCode from 'qrcode';
+import { isDappMode, startDappMode } from './dapp.js';
 
 // ---------------------------------------------------------------- helpers
 const $ = (sel) => document.querySelector(sel);
@@ -636,6 +637,10 @@ document.addEventListener('keydown', (e) => {
   try { state.payWith = localStorage.getItem(LAST_PAY_KEY) || null; } catch { /* ignore */ }
 
   initWallet(cfg);
+  if (isDappMode()) {
+    // wallet browser: connect straight away (network is switched per order at checkout)
+    startDappMode({ cfg, wagmi: state.wagmi, appkit: state.appkit, onConnected: () => { if (state.view === 'pay') { refreshBalance(); renderSheet(); } } });
+  }
   await loadProducts();
 
   const q = new URLSearchParams(location.search);
