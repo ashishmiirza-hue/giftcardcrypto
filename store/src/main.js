@@ -1,7 +1,5 @@
-import { createAppKit } from '@reown/appkit';
-import { WagmiAdapter } from '@reown/appkit-adapter-wagmi';
-import { base, baseSepolia, bsc } from '@reown/appkit/networks';
-import { writeContract, switchChain, getAccount, watchAccount, readContract } from '@wagmi/core';
+import { initWallet as createWallet, connectWallet, switchToStoreChain, switchHelpText } from './wallet.js';
+import { writeContract, getAccount, watchAccount, readContract } from '@wagmi/core';
 import { erc20Abi, formatUnits } from 'viem';
 
 // ---------------------------------------------------------------- helpers
@@ -86,24 +84,9 @@ const state = {
 
 // ---------------------------------------------------------------- wallet (Reown AppKit)
 function initWallet(cfg) {
-  const network = { [bsc.id]: bsc, [base.id]: base, [baseSepolia.id]: baseSepolia }[cfg.network.chainId] || bsc;
-  const adapter = new WagmiAdapter({ projectId: cfg.projectId, networks: [network] });
-  state.wagmi = adapter.wagmiConfig;
-  state.appkit = createAppKit({
-    adapters: [adapter],
-    networks: [network],
-    defaultNetwork: network,
-    projectId: cfg.projectId,
-    metadata: {
-      name: cfg.storeName,
-      description: `Gift cards paid in ${cfg.network.token.symbol}`,
-      url: window.location.origin,
-      icons: [`${window.location.origin}/icon.png`],
-    },
-    features: { analytics: false, email: false, socials: false, swaps: false, onramp: false, send: false, history: false },
-    themeMode: 'light',
-    themeVariables: { '--w3m-accent': '#2775CA', '--w3m-font-family': 'Figtree, system-ui, sans-serif', '--w3m-z-index': 3000 },
-  });
+  const w = createWallet(cfg, `Gift cards paid in ${cfg.network.token.symbol}`);
+  state.wagmi = w.wagmi;
+  state.appkit = w.appkit;
 
   watchAccount(state.wagmi, {
     onChange() {
@@ -142,7 +125,11 @@ const withTimeout = (promise, ms, label) => Promise.race([
 async function pay() {
   const { cfg, wagmi, order, token } = state;
   let acct = getAccount(wagmi);
-  if (!acct.isConnected) { state.appkit.open(); return; }
+  if (!acct.isConnected) {
+    try { await connectWallet({ appkit: state.appkit, wagmi }); }
+    catch (e) { state.error = friendlyWalletError(e); renderSheet(); }
+    return;
+  }
 
   state.error = null;
   state.errorDetail = null;
@@ -153,10 +140,11 @@ async function pay() {
   // (Trust Wallet, for one) never answer this request, so don't wait forever.
   if (acct.chainId !== cfg.network.chainId) {
     try {
-      await withTimeout(switchChain(wagmi, { chainId: cfg.network.chainId }), 25000, 'network switch timed out');
+      const ok = await switchToStoreChain(cfg, wagmi);
+      if (!ok) throw new Error(switchHelpText(cfg));
     } catch (e) {
-      state.error = `Your wallet is on a different network. In your wallet, switch the network to ${cfg.network.name}, then press Pay again.`;
-      state.errorDetail = e.shortMessage || e.message;
+      state.error = e.message?.startsWith('Switch your wallet') ? e.message : friendlyWalletError(e);
+      state.errorDetail = e.shortMessage || null;
       state.view = 'pay';
       renderSheet();
       return;

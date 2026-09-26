@@ -1,8 +1,8 @@
 import {
-  getAccount, watchAccount, readContract, writeContract, switchChain, signMessage, waitForTransactionReceipt,
+  getAccount, watchAccount, readContract, writeContract, signMessage, waitForTransactionReceipt,
 } from '@wagmi/core';
 import { erc20Abi, parseUnits, formatUnits } from 'viem';
-import { initWallet, friendlyWalletError } from './wallet.js';
+import { initWallet, friendlyWalletError, connectWallet, switchToStoreChain, switchHelpText } from './wallet.js';
 
 const BILLING_ABI = [
   { type: 'function', name: 'enroll', stateMutability: 'nonpayable', inputs: [{ name: 'maxPerCharge', type: 'uint128' }, { name: 'maxPerPeriod', type: 'uint128' }], outputs: [] },
@@ -73,13 +73,9 @@ async function readChain() {
 }
 
 // ------------------------------------------------------------------ writes
-const withTimeout = (p, ms) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error('network switch timed out')), ms))]);
-
 async function ensureChain() {
-  const acct = getAccount(S.wagmi);
-  if (acct.chainId === S.cfg.network.chainId) return;
-  try { await withTimeout(switchChain(S.wagmi, { chainId: S.cfg.network.chainId }), 25000); }
-  catch { throw new Error(`Switch your wallet to ${S.cfg.network.name} and try again.`); }
+  const ok = await switchToStoreChain(S.cfg, S.wagmi);
+  if (!ok) throw new Error(switchHelpText(S.cfg));
 }
 
 async function send(kind, request) {
@@ -93,6 +89,7 @@ async function send(kind, request) {
     return true;
   } catch (e) {
     S.error = e.message?.startsWith('Switch your wallet') ? e.message : friendlyWalletError(e, S.cfg);
+    S.chainId = getAccount(S.wagmi).chainId ?? S.chainId;
     return false;
   } finally {
     S.busy = null; render();
@@ -217,10 +214,10 @@ function render() {
   const walletLine = `<div class="wallet-row"><span>Wallet <code>${esc(short(S.address))}</code>${S.balance !== null ? `, ${esc(num(fromUnits(S.balance), 4))} ${esc(SYM())}` : ''}</span>
     <button class="link-btn" id="change-wallet" type="button">Change</button></div>`;
   const wrongNet = S.chainId !== S.cfg.network.chainId
-    ? `<p class="msg warn">Your wallet is on another network. You'll be asked to switch to ${esc(S.cfg.network.name)}. If nothing happens, switch it in your wallet app.</p>` : '';
+    ? `<div class="msg warn">Your wallet is on another network. <button class="link-btn" id="switch-net" type="button">${S.busy === 'switch' ? 'Check your wallet…' : `Switch to ${esc(S.cfg.network.name)}`}</button></div>` : '';
 
   if (st.active && !S.editLimits) {
-    body.innerHTML = `${walletLine}${err}
+    body.innerHTML = `${walletLine}${wrongNet}${err}
       <p class="msg ok">Billing is active. Limits: ${esc(num(fromUnits(S.account.maxPerCharge)))} ${esc(SYM())} per charge, ${esc(num(fromUnits(S.account.maxPerPeriod)))} ${esc(SYM())} per 30 days.</p>
       ${S.session ? '' : `<button class="btn btn-primary btn-block" id="signin" type="button">${busy('signin', 'Check your wallet') || 'Sign in to see usage'}</button>
       <p class="small">Signing a message is free and doesn't send any transaction.</p>`}`;
@@ -293,7 +290,20 @@ document.addEventListener('click', async (e) => {
   if (!b) return;
   if (b.dataset.copy) { try { await navigator.clipboard.writeText(b.dataset.copy); toast('Copied'); } catch { toast('Copy failed'); } return; }
   switch (b.id) {
-    case 'connect': case 'change-wallet': return S.appkit.open();
+    case 'connect':
+      S.error = null;
+      try { await connectWallet({ appkit: S.appkit, wagmi: S.wagmi }); }
+      catch (err) { S.error = friendlyWalletError(err, S.cfg); render(); }
+      return;
+    case 'change-wallet': return S.appkit.open();
+    case 'switch-net': {
+      S.busy = 'switch'; S.error = null; render();
+      try { if (!(await switchToStoreChain(S.cfg, S.wagmi))) S.error = switchHelpText(S.cfg); }
+      catch (err) { S.error = friendlyWalletError(err, S.cfg); }
+      S.busy = null; S.chainId = getAccount(S.wagmi).chainId ?? null;
+      if (S.chainId === S.cfg.network.chainId) await readChain();
+      return render();
+    }
     case 'approve': { const err = readForm(); if (err) { S.error = err; return render(); } return approve(); }
     case 'activate': { const err = readForm(); if (err) { S.error = err; return render(); } return activate(); }
     case 'signin': return signIn();
@@ -349,6 +359,7 @@ document.addEventListener('input', (e) => {
     const changed = acct.address !== S.address;
     S.address = acct.isConnected ? acct.address : null;
     S.chainId = acct.chainId ?? null;
+    if (!changed && acct.chainId === S.cfg.network.chainId && S.allowance === null && S.address) { await readChain(); }
     if (changed) {
       S.allowance = S.balance = S.account = null; S.me = null; S.newKey = null; S.error = null;
       try { S.session = S.address ? sessionStorage.getItem(sessionKey()) : null; } catch { S.session = null; }
