@@ -1,0 +1,89 @@
+import Database from 'better-sqlite3';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import fs from 'node:fs';
+import { config } from './config.js';
+
+const dir = path.dirname(fileURLToPath(import.meta.url));
+const file = config.dbPath || path.join(dir, '..', 'store.db');
+fs.mkdirSync(path.dirname(file), { recursive: true });
+export const db = new Database(file);
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS products (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  name           TEXT NOT NULL,
+  brand          TEXT NOT NULL,
+  category       TEXT NOT NULL DEFAULT 'Shopping',
+  face_value_inr INTEGER NOT NULL,
+  discount_pct   REAL NOT NULL DEFAULT 0,
+  color          TEXT NOT NULL DEFAULT '#2A6F97',
+  active         INTEGER NOT NULL DEFAULT 1,
+  created_at     INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS codes (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_id INTEGER NOT NULL REFERENCES products(id),
+  code       TEXT NOT NULL,
+  status     TEXT NOT NULL DEFAULT 'available',  -- available | reserved | sold
+  order_id   TEXT,
+  created_at INTEGER NOT NULL,
+  UNIQUE(product_id, code)
+);
+
+CREATE TABLE IF NOT EXISTS orders (
+  id             TEXT PRIMARY KEY,
+  access_token   TEXT NOT NULL,
+  product_id     INTEGER NOT NULL REFERENCES products(id),
+  email          TEXT,
+  amount_units   TEXT NOT NULL,          -- exact USDC amount in base units (6 decimals)
+  usdc_inr_rate  REAL NOT NULL,
+  status         TEXT NOT NULL DEFAULT 'pending', -- pending | paid | needs_code | expired
+  claimed_tx     TEXT,                   -- txHash sent by the browser (not trusted until verified)
+  tx_hash        TEXT UNIQUE,            -- verified payment tx
+  payer          TEXT,
+  code_id        INTEGER REFERENCES codes(id),
+  created_at     INTEGER NOT NULL,
+  expires_at     INTEGER NOT NULL,
+  paid_at        INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_orders_amount ON orders(amount_units, status);
+
+-- Payments that reached the wallet but matched no order (wrong amount, very late, etc.)
+CREATE TABLE IF NOT EXISTS unmatched_payments (
+  tx_hash      TEXT PRIMARY KEY,
+  payer        TEXT NOT NULL,
+  value_units  TEXT NOT NULL,
+  block_number INTEGER NOT NULL,
+  seen_at      INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+`);
+
+export function getMeta(key) {
+  return db.prepare('SELECT value FROM meta WHERE key = ?').get(key)?.value ?? null;
+}
+export function setMeta(key, value) {
+  db.prepare('INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+    .run(key, String(value));
+}
+
+// Seed a few sample products on first run so the store isn't empty.
+const count = db.prepare('SELECT COUNT(*) AS n FROM products').get().n;
+if (count === 0) {
+  const now = Date.now();
+  const ins = db.prepare(`INSERT INTO products(name, brand, category, face_value_inr, discount_pct, color, created_at)
+                          VALUES(?, ?, ?, ?, ?, ?, ?)`);
+  ins.run('Shopping card', 'Sample Store', 'Shopping', 500, 6, '#2A6F97', now);
+  ins.run('Shopping card', 'Sample Store', 'Shopping', 1000, 7, '#2A6F97', now);
+  ins.run('Gaming wallet top-up', 'Sample Games', 'Gaming', 1000, 5, '#7B2D8E', now);
+  ins.run('Food delivery credit', 'Sample Eats', 'Food', 750, 8, '#C8553D', now);
+  ins.run('Streaming, 3 months', 'Sample Stream', 'Entertainment', 499, 4, '#1F7A5C', now);
+}
