@@ -1,4 +1,4 @@
-import { initWallet as createWallet, connectWallet, switchToStoreChain, switchHelpText } from './wallet.js';
+import { initWallet as createWallet, connectWallet, switchToStoreChain, switchHelpText, walletChooserHTML, isMobile } from './wallet.js';
 import { writeContract, getAccount, watchAccount, readContract } from '@wagmi/core';
 import { erc20Abi, formatUnits } from 'viem';
 
@@ -126,7 +126,7 @@ async function pay() {
   const { cfg, wagmi, order, token } = state;
   let acct = getAccount(wagmi);
   if (!acct.isConnected) {
-    try { await connectWallet({ appkit: state.appkit, wagmi }); }
+    try { if ((await connectWallet({ appkit: state.appkit, wagmi })) === 'choose') { state.chooser = true; renderSheet(); } }
     catch (e) { state.error = friendlyWalletError(e); renderSheet(); }
     return;
   }
@@ -365,9 +365,10 @@ function renderSheet() {
     ${acct.isConnected && acct.chainId !== cfg.network.chainId ? `<p class="msg warn">Your wallet is on another network. Pressing Pay will ask to switch to ${esc(cfg.network.name)}. If nothing happens, switch the network to ${esc(cfg.network.name)} inside your wallet app yourself (in Trust Wallet: the network button at the top of the browser).</p>` : ''}
     ${lowBal ? `<p class="msg warn">This wallet has less ${esc(SYM())} on ${esc(cfg.network.name)} than the order amount. Top it up or connect another wallet.</p>` : ''}
     ${err}
+    ${!acct.isConnected && (state.chooser || (!window.ethereum && isMobile())) ? walletChooserHTML(cfg, { appkit: state.appkit }) : `
     <button class="btn btn-primary btn-block" id="pay" type="button" ${sending ? 'disabled' : ''}>
       ${sending ? '<span class="spinner" aria-hidden="true"></span> Waiting for your wallet' : acct.isConnected ? `Pay ${esc(order.amount)} ${esc(SYM())}` : 'Connect wallet to pay'}
-    </button>
+    </button>`}
     ${sending ? `
       <p class="msg info">${viaPhone
         ? `Open your wallet app on your phone and approve the request. It may first ask to switch to ${esc(cfg.network.name)}, then to send ${esc(SYM())}. If nothing shows up, open the wallet app manually and check for a pending request.`
@@ -501,7 +502,8 @@ document.addEventListener('click', (e) => {
   switch (t.id) {
     case 'reserve': return reserve();
     case 'pay': return pay();
-    case 'change-wallet': return state.appkit.open();
+    case 'change-wallet': return state.appkit ? state.appkit.open() : toast('Switch the account inside your wallet app.');
+    case 'wc-qr': return state.appkit?.open();
     case 'cancel-wait':
       state.view = 'pay';
       state.error = "If you already approved the payment in your wallet, don't pay again: it will show up here within a minute.";

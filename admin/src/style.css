@@ -287,3 +287,5 @@ td .amt-in { width: 90px; }
 .nav-link:hover { text-decoration: underline; }
 .deploy h3 { font-size: 1.05rem; font-weight: 700; margin: 14px 0 0; }
 .deploy table { margin-top: 4px; }
+
+.pill.warn { background: #FFF6E5; color: var(--warn); }

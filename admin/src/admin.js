@@ -96,7 +96,7 @@ function renderBilling() {
       const c = a.chain || {};
       return `<tr data-wallet="${a.wallet}">
         <td>${link('address', a.wallet, a.label || short(a.wallet))}${a.email ? `<br/><span class="small">${esc(a.email)}</span>` : ''}${a.blocked ? ' <span class="pill off">Blocked</span>' : ''}</td>
-        <td>${c.active ? '<span class="pill on">Active</span>' : '<span class="pill off">Off</span>'}</td>
+        <td>${c.active ? '<span class="pill on">Active</span>' : (c.allowance && Number(c.allowance) > 0) || c.allowance === 'unlimited' ? '<span class="pill warn">Approved only</span><br/><span class="small">not activated yet</span>' : '<span class="pill off">Off</span>'}</td>
         <td>${c.active ? `${esc(c.maxPerCharge)} / ${esc(c.maxPerPeriod)}` : '-'}</td>
         <td>${esc(c.remainingInPeriod ?? '-')}</td>
         <td>${esc(c.allowance ?? '-')}</td>
@@ -235,6 +235,14 @@ document.addEventListener('click', async (e) => {
       await api('/api/admin/billing/account', { method: 'POST', body: { wallet: b.dataset.block, blocked: b.dataset.state === '1' } });
       await load();
       return toast(b.dataset.state === '1' ? 'Customer blocked: their API key stops working' : 'Customer unblocked');
+    }
+
+    if (b.id === 'add-customer') {
+      const wallet = $('#c-wallet').value.trim();
+      const r = await api('/api/admin/billing/add-customer', { method: 'POST', body: { wallet } });
+      $('#c-wallet').value = '';
+      await load();
+      return toast(r.added ? `Customer added${r.active ? '' : ' (approved, not activated yet)'}` : 'Already in the list');
     }
 
     if (b.id === 'add-usage') {

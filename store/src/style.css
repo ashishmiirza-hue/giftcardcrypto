@@ -335,3 +335,8 @@ ul.plain strong { color: var(--ink); }
 .new-tag { font: 600 .72rem var(--body); background: #E7F4EE; color: var(--ok); padding: 2px 8px; border-radius: 999px; }
 @media (max-width: 760px) { .service-grid { grid-template-columns: 1fr; } }
 @media (max-width: 560px) { .services { padding-left: 16px; padding-right: 16px; } }
+
+/* ---------- open-in-wallet chooser ---------- */
+.wallet-chooser { border: 1px solid var(--line); border-radius: var(--r-md); padding: 16px; display: flex; flex-direction: column; gap: 10px; background: var(--surface); }
+.wc-title { font-weight: 700; font-size: 1.05rem; }
+.wc-btn { text-decoration: none; }

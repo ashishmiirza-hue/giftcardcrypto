@@ -106,11 +106,13 @@ async function deploy() {
     await c.waitForDeployment();
     const address = await c.getAddress();
     const tx = c.deploymentTransaction();
+    let block = null;
+    try { block = (await tx?.wait())?.blockNumber ?? null; } catch { /* optional */ }
     // Read back what the chain actually stored
     const live = new Contract(address, BUILD.abi, S.provider);
     const [token, treasury, keeper, owner] = await Promise.all([live.token(), live.treasury(), live.keeper(), live.owner()]);
-    S.deployed = { address, tx: tx?.hash, token, treasury, keeper, owner, paused: false };
-    try { localStorage.setItem(SAVED_KEY, JSON.stringify({ address, tx: tx?.hash })); } catch { /* ignore */ }
+    S.deployed = { address, tx: tx?.hash, block, token, treasury, keeper, owner, paused: false };
+    try { localStorage.setItem(SAVED_KEY, JSON.stringify({ address, tx: tx?.hash, block })); } catch { /* ignore */ }
     toast('Contract deployed');
   } catch (e) {
     S.error = friendly(e);
@@ -129,8 +131,10 @@ async function loadContract(address, { quiet = false } = {}) {
   try {
     const live = new Contract(getAddress(address), BUILD.abi, S.provider);
     const [token, treasury, keeper, owner, paused] = await Promise.all([live.token(), live.treasury(), live.keeper(), live.owner(), live.paused()]);
-    S.deployed = { address: getAddress(address), tx: S.deployed?.address === getAddress(address) ? S.deployed.tx : null, token, treasury, keeper, owner, paused };
-    try { localStorage.setItem(SAVED_KEY, JSON.stringify({ address: S.deployed.address, tx: S.deployed.tx })); } catch { /* ignore */ }
+    let saved = null; try { saved = JSON.parse(localStorage.getItem(SAVED_KEY) || 'null'); } catch { /* ignore */ }
+    const same = saved?.address && getAddress(saved.address) === getAddress(address);
+    S.deployed = { address: getAddress(address), tx: same ? saved.tx : null, block: same ? saved.block : null, token, treasury, keeper, owner, paused };
+    try { localStorage.setItem(SAVED_KEY, JSON.stringify({ address: S.deployed.address, tx: S.deployed.tx, block: S.deployed.block })); } catch { /* ignore */ }
     S.error = null;
     render();
     return true;
@@ -206,7 +210,7 @@ function render() {
   const d = S.deployed;
   if (d) {
     const ok = [d.token, d.treasury, d.keeper].every(Boolean);
-    const env = `NETWORK=${net.key}\nBILLING_CONTRACT=${d.address}${ks && ks.address === d.keeper ? `\nKEEPER_PRIVATE_KEY=${ks.privateKey}` : '\nKEEPER_PRIVATE_KEY=<private key of ' + d.keeper + '>'}`;
+    const env = `NETWORK=${net.key}\nBILLING_CONTRACT=${d.address}${d.block ? `\nBILLING_START_BLOCK=${d.block}` : ''}${ks && ks.address === d.keeper ? `\nKEEPER_PRIVATE_KEY=${ks.privateKey}` : '\nKEEPER_PRIVATE_KEY=<private key of ' + d.keeper + '>'}`;
     $('#deploy-body').innerHTML = `
       <p class="msg ok">Deployed. Contract address:</p>
       <div class="copy-line"><code class="mono">${esc(d.address)}</code><button class="btn btn-ghost btn-sm" type="button" data-copy="${esc(d.address)}">Copy</button></div>

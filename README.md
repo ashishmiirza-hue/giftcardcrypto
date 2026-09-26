@@ -42,7 +42,7 @@ Ek hi Render service store, admin aur backend teeno chalati hai:
 | `NODE_VERSION` | `22` |
 | `NETWORK` | `bsc` |
 | `RECEIVING_WALLET` | tumhara wallet address (`0x...`), private key nahi |
-| `REOWN_PROJECT_ID` | Reown dashboard ka Project ID |
+| `REOWN_PROJECT_ID` | Optional. Khaali = bina Reown ke (wallet ke browser / MetaMask extension se connect) |
 | `ADMIN_KEY` | 16+ characters ka password |
 | `RPC_URL` | khaali chhodo (free public RPC), ya Ankr: `https://rpc.ankr.com/bsc/KEY` |
 | `INR_RATE_FALLBACK` | `96` |
@@ -51,7 +51,7 @@ Save ke baad **Manual Deploy → Clear build cache & deploy**.
 
 **Deploy sahi hua ya nahi:** `/api/health` kholo. `"blockchain":"connected"` dikhe to sab theek hai. `"not connected"` ho to `problem` mein wajah likhi hogi. Site phir bhi khuli rahegi, aur admin panel ke upar laal warning dikhegi.
 
-**Reown:** dashboard.reown.com mein apne project ki allow-list mein `<service>.onrender.com` daalo, warna wallet connect nahi hoga.
+**Wallet connect:** Reown zaroori nahi. Phone par customer ko "Open in Trust Wallet / MetaMask" buttons milte hain (site wallet ke andar khulti hai), PC par MetaMask extension se connect hota hai. Reown ka QR chahiye to `REOWN_PROJECT_ID` daalo aur domain Reown allow-list mein add karo.
 
 ---
 

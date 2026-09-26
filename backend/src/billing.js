@@ -19,6 +19,7 @@ const DEC = config.network.token.decimals;
 const ERC20_ABI = [
   'function allowance(address owner, address spender) view returns (uint256)',
   'function balanceOf(address owner) view returns (uint256)',
+  'event Approval(address indexed owner, address indexed spender, uint256 value)',
 ];
 
 const enabled = !!config.billing.contract;
@@ -128,7 +129,11 @@ const showChain = (c) => c && ({
 
 /** Largest amount that can be charged right now, and why it might be zero. */
 function chargeable(chain, dueUnits) {
-  if (!chain?.active) return { max: 0n, reason: 'User is not enrolled on-chain (never activated, or cancelled).' };
+  if (!chain?.active) {
+    return { max: 0n, reason: chain?.allowance > 0n
+      ? 'Approved USDT but has not activated billing yet (step 2 on the AI tokens page).'
+      : 'Billing not active (never activated, or cancelled).' };
+  }
   const caps = [
     [dueUnits, 'Nothing is due.'],
     [chain.maxPerCharge, 'Per-charge limit is 0.'],
@@ -267,6 +272,58 @@ const publicCharge = (c) => ({
   tx_hash: c.tx_hash, error: c.error, created_at: c.created_at,
 });
 
+// ------------------------------------------------------------------ customer discovery
+// Customers show up in the admin panel as soon as they approve USDT for the
+// contract or activate billing on-chain; no sign-in on the website needed.
+
+function addAccount(wallet, source) {
+  const r = db.prepare('INSERT OR IGNORE INTO billing_accounts(wallet, label, created_at) VALUES(?, ?, ?)')
+    .run(lc(wallet), null, now());
+  if (r.changes) console.log(`[billing] new customer ${lc(wallet)} (${source})`);
+  return r.changes > 0;
+}
+
+export const discovery = { lastBlock: null, error: null, found: 0 };
+
+async function discover() {
+  const head = await provider.getBlockNumber();
+  let last = Number(getMeta('billing_discovery_block'));
+  if (!last) {
+    // first run: from the deploy block if known, else roughly the last 12 hours
+    last = (config.billing.startBlock ? config.billing.startBlock - 1 : head - 100000);
+    if (last < 0) last = 0;
+  }
+  const CHUNK = 1000;
+  const approvalFilter = token.filters.Approval(null, config.billing.contract);
+  const enrolledFilter = billing.filters.Enrolled();
+  while (last < head) {
+    const to = Math.min(head, last + CHUNK);
+    const [approvals, enrolled] = await Promise.all([
+      token.queryFilter(approvalFilter, last + 1, to),
+      billing.queryFilter(enrolledFilter, last + 1, to),
+    ]);
+    for (const l of approvals) if (l.args.value > 0n && addAccount(l.args.owner, 'approved')) discovery.found++;
+    for (const l of enrolled) if (addAccount(l.args.user, 'activated')) discovery.found++;
+    last = to;
+    setMeta('billing_discovery_block', last);
+  }
+  discovery.lastBlock = last;
+  discovery.error = null;
+}
+
+function startDiscovery() {
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try { await discover(); }
+    catch (e) { discovery.error = e.shortMessage || e.message; }
+    finally { running = false; }
+  };
+  tick();
+  setInterval(tick, 30e3);
+}
+
 // ------------------------------------------------------------------ routes
 
 export function mountBilling(app, { wrap, rateLimit }) {
@@ -397,6 +454,8 @@ export function mountBilling(app, { wrap, rateLimit }) {
       } catch { /* shown as unknown */ }
     }
 
+    status.discovery = { ...discovery };
+    if (enabled && discovery.error) status.problems.push(`Customer auto-discovery is failing: ${discovery.error}. Customers who approve/activate may not appear until the RPC works (see RPC_URL).`);
     const accounts = db.prepare('SELECT * FROM billing_accounts ORDER BY created_at DESC LIMIT 200').all();
     const rows = await Promise.all(accounts.map(async (a) => {
       const l = ledger(a.wallet);
@@ -426,6 +485,19 @@ export function mountBilling(app, { wrap, rateLimit }) {
     res.json({ charge: await charge(b.wallet, b.amount) });
   }));
 
+  // Add a customer by wallet address (e.g. someone who approved before discovery ran).
+  app.post('/api/admin/billing/add-customer', wrap(async (req, res) => {
+    need(enabled, 400, 'Billing contract is not configured.');
+    const wallet = String(req.body?.wallet || '').trim();
+    need(ethers.isAddress(wallet), 400, 'Wallet address is not valid.');
+    let chain;
+    try { chain = await onChain(wallet); }
+    catch (e) { throw new BillingError(503, `Blockchain is not reachable right now (${e.shortMessage || e.message}).`); }
+    need(chain.active || chain.allowance > 0n, 400, "This wallet hasn't approved USDT for the billing contract or activated billing yet.");
+    const added = addAccount(wallet, 'admin');
+    res.json({ added, active: chain.active, allowance: fmt(chain.allowance) });
+  }));
+
   app.post('/api/admin/billing/account', wrap((req, res) => {
     const b = req.body || {};
     need(ethers.isAddress(b.wallet || ''), 400, 'Wallet address is not valid.');
@@ -436,6 +508,7 @@ export function mountBilling(app, { wrap, rateLimit }) {
   }));
 
   if (enabled) {
+    startDiscovery();
     reconcile();
     setInterval(() => reconcile().catch(() => {}), 60e3);
     console.log(`[billing] contract ${config.billing.contract}${keeper ? `, keeper ${keeper.address}` : ' (no keeper key: charges disabled)'}`);

@@ -111,7 +111,12 @@ export const config = {
   rpcUrl: (process.env.RPC_URL || '').trim() || network.publicRpc,
   rpcUrl2: (process.env.RPC_URL_2 || '').trim() || null,
   wallet: ethers.getAddress(wallet),
-  reownProjectId: required('REOWN_PROJECT_ID'),
+  // Optional. Without it, wallets connect directly (extension / in-wallet browser)
+  // and mobile users get "Open in Trust Wallet / MetaMask" buttons.
+  reownProjectId: (process.env.REOWN_PROJECT_ID || '').trim() || null,
+  // RPC the visitor's browser uses for read-only calls (balance etc.). Never the
+  // server's RPC_URL, which may contain a private key-quota.
+  browserRpc: (process.env.BROWSER_RPC_URL || '').trim() || network.publicRpc,
   adminKey,
   confirmations: Math.max(1, Number(process.env.CONFIRMATIONS || network.confirmations)),
   pollIntervalMs: Math.max(3000, Number(process.env.POLL_INTERVAL_MS || 10000)),
@@ -128,6 +133,8 @@ export const config = {
   billing: {
     contract: ethers.isAddress((process.env.BILLING_CONTRACT || '').trim()) ? ethers.getAddress(process.env.BILLING_CONTRACT.trim()) : null,
     keeperKey: (process.env.KEEPER_PRIVATE_KEY || '').trim() || null,
+    // Block the contract was deployed in: customers are discovered from here on.
+    startBlock: Number(process.env.BILLING_START_BLOCK) || null,
     pricePer1k: Number(process.env.AI_PRICE_PER_1K_TOKENS || 0.002),
     defaultApprove: Number(process.env.AI_DEFAULT_APPROVE || 1000),
     defaultMaxPerCharge: Number(process.env.AI_DEFAULT_MAX_PER_CHARGE || 50),

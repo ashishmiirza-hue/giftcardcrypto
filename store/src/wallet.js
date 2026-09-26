@@ -1,8 +1,8 @@
 import { createAppKit } from '@reown/appkit';
 import { WagmiAdapter } from '@reown/appkit-adapter-wagmi';
 import { base, baseSepolia, bsc, bscTestnet } from '@reown/appkit/networks';
-import { defineChain } from 'viem';
-import { connect, getAccount, getConnectors, switchChain, injected } from '@wagmi/core';
+import { defineChain, http } from 'viem';
+import { connect, getAccount, getConnectors, switchChain, injected, createConfig } from '@wagmi/core';
 
 /** Pick the AppKit network object for the store's chain. */
 function networkFor(cfg) {
@@ -21,7 +21,17 @@ function networkFor(cfg) {
 
 export function initWallet(cfg, description) {
   const network = networkFor(cfg);
-  const adapter = new WagmiAdapter({ projectId: cfg.projectId, networks: [network] });
+  // Read-only calls (balance, allowance) go to our chosen public RPC, not to
+  // Reown's RPC, so they keep working on Reown's free plan or without Reown.
+  const transports = { [network.id]: http(cfg.network.browserRpc || cfg.network.publicRpc) };
+
+  if (!cfg.projectId) {
+    // No Reown: direct wallet connections only (extension / in-wallet browser).
+    const wagmi = createConfig({ chains: [network], connectors: [injected()], transports });
+    return { appkit: null, wagmi, network };
+  }
+
+  const adapter = new WagmiAdapter({ projectId: cfg.projectId, networks: [network], transports });
   const appkit = createAppKit({
     adapters: [adapter],
     networks: [network],
@@ -67,21 +77,58 @@ const hasInjected = () => typeof window !== 'undefined' && !!window.ethereum;
  * or with a browser extension, connect to it directly: one tap, no popup list.
  * Otherwise open the Reown popup (QR code / wallet list).
  */
+export const isMobile = () => /android|iphone|ipad|ipod/i.test(navigator.userAgent || '');
+
 export async function connectWallet({ appkit, wagmi }) {
   if (hasInjected()) {
     try {
       const existing = getConnectors(wagmi).find((c) => c.type === 'injected' && (c.id === 'injected' || c.id === 'io.metamask' || c.id === 'com.trustwallet.app'))
         || getConnectors(wagmi).find((c) => c.type === 'injected');
       await connect(wagmi, { connector: existing || injected() });
-      return;
+      return 'connected';
     } catch (e) {
       const m = `${e?.shortMessage || ''} ${e?.message || ''}`.toLowerCase();
       if (m.includes('reject') || m.includes('denied')) throw e;   // user said no, don't pop another window
-      if (m.includes('already connected')) return;
-      // fall through to the popup
+      if (m.includes('already connected')) return 'connected';
     }
   }
-  await appkit.open();
+  // No wallet in this browser. On phones, opening the site inside the wallet
+  // app works on every plan; the caller shows those buttons.
+  if (isMobile() || !appkit) return 'choose';
+  await appkit.open();   // desktop: Reown QR code
+  return 'popup';
+}
+
+/** Links that open this page inside a wallet app's own browser. */
+export function openInWalletLinks(cfg) {
+  const url = window.location.href;
+  const bare = url.replace(/^https?:\/\//, '');
+  const trustCoin = { 56: 20000714, 97: 20000714, 8453: 8453 }[cfg.network.chainId] || 60;
+  return {
+    trust: `https://link.trustwallet.com/open_url?coin_id=${trustCoin}&url=${encodeURIComponent(url)}`,
+    metamask: `https://metamask.app.link/dapp/${bare}`,
+    url,
+  };
+}
+
+/** Panel shown when there's no wallet in this browser. */
+export function walletChooserHTML(cfg, { appkit } = {}) {
+  const l = openInWalletLinks(cfg);
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  return `
+    <div class="wallet-chooser">
+      <p class="wc-title">${isMobile() ? 'Open this page in your wallet app' : 'Connect a wallet'}</p>
+      <p class="small">${isMobile()
+        ? `Your wallet connects instantly inside its own browser. Choose your wallet; it opens this same page there.`
+        : `Install the MetaMask browser extension and refresh, or open this page on your phone inside Trust Wallet or MetaMask.`}</p>
+      ${isMobile() ? `
+      <a class="btn btn-primary btn-block wc-btn" href="${esc(l.trust)}">Open in Trust Wallet</a>
+      <a class="btn btn-ghost btn-block wc-btn" href="${esc(l.metamask)}">Open in MetaMask</a>` : `
+      <a class="btn btn-ghost btn-block wc-btn" href="https://metamask.io/download/" target="_blank" rel="noopener">Get MetaMask extension</a>`}
+      <div class="copy-line"><code>${esc(l.url)}</code><button class="btn btn-ghost btn-sm" type="button" data-copy="${esc(l.url)}">Copy link</button></div>
+      <p class="small">Other wallet? Copy the link and open it in your wallet app's browser.</p>
+      ${appkit ? '<button class="link-btn" type="button" id="wc-qr">Use WalletConnect / QR instead</button>' : ''}
+    </div>`;
 }
 
 const timeout = (p, ms) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error('network switch timed out')), ms))]);

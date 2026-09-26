@@ -2,7 +2,7 @@ import {
   getAccount, watchAccount, readContract, writeContract, signMessage, waitForTransactionReceipt,
 } from '@wagmi/core';
 import { erc20Abi, parseUnits, formatUnits } from 'viem';
-import { initWallet, friendlyWalletError, connectWallet, switchToStoreChain, switchHelpText } from './wallet.js';
+import { initWallet, friendlyWalletError, connectWallet, switchToStoreChain, switchHelpText, walletChooserHTML, isMobile } from './wallet.js';
 
 const BILLING_ABI = [
   { type: 'function', name: 'enroll', stateMutability: 'nonpayable', inputs: [{ name: 'maxPerCharge', type: 'uint128' }, { name: 'maxPerPeriod', type: 'uint128' }], outputs: [] },
@@ -41,6 +41,7 @@ const S = {
   busy: null,          // 'approve' | 'enroll' | 'limits' | 'cancel' | 'signin' | null
   error: null,
   editLimits: false,
+  chooser: false,
   session: null,
   me: null,
   newKey: null,
@@ -205,7 +206,10 @@ function render() {
   const busy = (k, label) => (S.busy === k ? `<span class="spinner" aria-hidden="true"></span> ${label}` : null);
 
   if (!st.connected) {
-    body.innerHTML = `${err}<button class="btn btn-primary btn-block" id="connect" type="button">Connect wallet</button>
+    const noWallet = !window.ethereum && isMobile();
+    body.innerHTML = S.chooser || noWallet
+      ? `${err}${walletChooserHTML(S.cfg, { appkit: S.appkit })}`
+      : `${err}<button class="btn btn-primary btn-block" id="connect" type="button">Connect wallet</button>
       <p class="small">Works with Trust Wallet, MetaMask and other wallets on ${esc(S.cfg.network.name)}.</p>`;
     $('#dashboard').hidden = true;
     return;
@@ -292,10 +296,11 @@ document.addEventListener('click', async (e) => {
   switch (b.id) {
     case 'connect':
       S.error = null;
-      try { await connectWallet({ appkit: S.appkit, wagmi: S.wagmi }); }
+      try { if ((await connectWallet({ appkit: S.appkit, wagmi: S.wagmi })) === 'choose') { S.chooser = true; render(); } }
       catch (err) { S.error = friendlyWalletError(err, S.cfg); render(); }
       return;
-    case 'change-wallet': return S.appkit.open();
+    case 'wc-qr': return S.appkit?.open();
+    case 'change-wallet': return S.appkit ? S.appkit.open() : toast('Switch the account inside your wallet app.');
     case 'switch-net': {
       S.busy = 'switch'; S.error = null; render();
       try { if (!(await switchToStoreChain(S.cfg, S.wagmi))) S.error = switchHelpText(S.cfg); }

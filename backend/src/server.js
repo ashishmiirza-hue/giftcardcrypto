@@ -68,7 +68,7 @@ app.get('/api/config', (req, res) => {
   res.json({
     storeName: config.storeName,
     projectId: config.reownProjectId,
-    network: config.network,
+    network: { ...config.network, browserRpc: config.browserRpc },
     recipient: config.wallet,
     orderTtlMin: config.orderTtlMin,
   });
