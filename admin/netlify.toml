@@ -1,0 +1,25 @@
+# Netlify settings for the ADMIN site (alag Netlify site banao)
+# Netlify par: "Base directory" = admin
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# /api/* calls Render backend par jayengi.
+# YOUR-BACKEND ko apne Render service ke naam se badlo.
+[[redirects]]
+  from = "/api/*"
+  to = "https://YOUR-BACKEND.onrender.com/api/:splat"
+  status = 200
+  force = true
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"

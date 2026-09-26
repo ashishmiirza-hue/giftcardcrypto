@@ -1,0 +1,30 @@
+# Netlify settings for the STORE site
+# Netlify par: "Base directory" = store
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# Admin API store site se band. Admin sirf admin site se chalega.
+[[redirects]]
+  from = "/api/admin/*"
+  to = "/404.html"
+  status = 404
+  force = true
+
+# Baaki /api/* calls Render backend par jayengi.
+# YOUR-BACKEND ko apne Render service ke naam se badlo.
+[[redirects]]
+  from = "/api/*"
+  to = "https://YOUR-BACKEND.onrender.com/api/:splat"
+  status = 200
+  force = true
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "same-origin"

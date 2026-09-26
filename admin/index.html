@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Store admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Figtree:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <header class="top admin-top">
+    <span class="wordmark">Store admin</span>
+    <div class="top-right">
+      <span class="net-pill" id="net-pill" hidden></span>
+      <button class="link-btn" id="refresh" type="button" hidden>Refresh</button>
+      <button class="link-btn" id="logout" type="button" hidden>Log out</button>
+    </div>
+  </header>
+
+  <section class="login panel" id="login">
+    <h2>Log in</h2>
+    <div class="field">
+      <label for="key">Admin key</label>
+      <input id="key" type="password" autocomplete="current-password" />
+      <span class="hint">The ADMIN_KEY value from the server's .env file.</span>
+    </div>
+    <p class="msg err" id="login-err" hidden></p>
+    <button class="btn btn-primary" id="login-btn" type="button">Log in</button>
+  </section>
+
+  <main class="admin" id="app" hidden>
+    <section>
+      <div class="stats" id="stats"></div>
+    </section>
+
+    <section>
+      <h2>Cards and stock</h2>
+      <div class="table-wrap"><table id="products"></table></div>
+      <p class="small" style="margin-top:8px">Edit discount or face value, then press Save on that row. Turning a card off hides it from the store.</p>
+    </section>
+
+    <section class="two-col">
+      <div class="panel">
+        <h2>Add codes</h2>
+        <div class="field">
+          <label for="codes-product">Card</label>
+          <select id="codes-product"></select>
+        </div>
+        <div class="field">
+          <label for="codes">Codes, one per line</label>
+          <textarea id="codes" spellcheck="false"></textarea>
+          <span class="hint">Duplicates are skipped. Paid orders waiting for this card get their code right away.</span>
+        </div>
+        <button class="btn btn-primary" id="add-codes" type="button">Add codes</button>
+      </div>
+
+      <div class="panel">
+        <h2>New card</h2>
+        <div class="row">
+          <div class="field"><label for="np-brand">Brand</label><input id="np-brand" /></div>
+          <div class="field"><label for="np-name">Card name</label><input id="np-name" placeholder="Gift card" /></div>
+        </div>
+        <div class="row">
+          <div class="field"><label for="np-cat">Category</label><input id="np-cat" placeholder="Shopping" /></div>
+          <div class="field"><label for="np-face">Face value (₹)</label><input id="np-face" type="number" min="1" inputmode="numeric" /></div>
+        </div>
+        <div class="row">
+          <div class="field"><label for="np-disc">Discount %</label><input id="np-disc" type="number" min="0" max="89" step="0.5" value="5" /></div>
+          <div class="field"><label for="np-color">Card colour</label><input id="np-color" type="color" value="#2A6F97" /></div>
+        </div>
+        <button class="btn btn-primary" id="add-product" type="button">Add card</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Orders</h2>
+      <div class="table-wrap"><table id="orders"></table></div>
+    </section>
+
+    <section>
+      <h2>Payments with no matching order</h2>
+      <p class="small" style="margin-bottom:12px">USDC that reached your wallet but didn't match any order, usually a wrong amount or a payment more than 24 hours late. Check with the customer and refund or deliver manually.</p>
+      <div class="table-wrap"><table id="unmatched"></table></div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="/src/admin.js"></script>
+</body>
+</html>
