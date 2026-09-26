@@ -1,4 +1,5 @@
-import Database from 'better-sqlite3';
+// Node's built-in SQLite: nothing to compile, so no Node-version mismatch errors on deploy.
+import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -7,9 +8,31 @@ import { config } from './config.js';
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const file = config.dbPath || path.join(dir, '..', 'store.db');
 fs.mkdirSync(path.dirname(file), { recursive: true });
-export const db = new Database(file);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+export const db = new DatabaseSync(file);
+db.exec('PRAGMA journal_mode = WAL');
+db.exec('PRAGMA foreign_keys = ON');
+db.exec('PRAGMA busy_timeout = 5000');
+
+/**
+ * db.transaction(fn) -> function that runs fn inside BEGIN/COMMIT and rolls
+ * back if fn throws. Nested calls join the outer transaction.
+ */
+let depth = 0;
+db.transaction = (fn) => (...args) => {
+  if (depth > 0) return fn(...args);
+  depth++;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const result = fn(...args);
+    db.exec('COMMIT');
+    return result;
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  } finally {
+    depth--;
+  }
+};
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS products (
